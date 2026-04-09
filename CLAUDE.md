@@ -10,14 +10,26 @@
 - **Feishu**: @larksuiteoapi/node-sdk (WebSocket, text + image messages)
 
 ## CLI Commands
-- `frail` — Auto-start daemon + attach TUI
-- `frail start` — Start daemon in background
+- `frail` — Show help
+- `frail attach` — Connect to daemon TUI
+- `frail daemon` — Run daemon in foreground (for dev)
+- `frail status` — Live daemon status (Ctrl+C to exit)
 - `frail stop` — Stop daemon
-- `frail status` — Show daemon status
-- `frail attach` — Attach TUI to running daemon
-- `frail logs` — Tail daemon log file
-- `frail init` — Run setup wizard
+- `frail logs` — Tail daemon logs
+- `frail config` — View/set config (`config <key> [value]`)
+- `frail init` — Setup wizard (LLM / Linear / Feishu)
+- `frail uninstall` — Remove LaunchAgent
+- `bun run dev` — Daemon with hot reload
 - `bun test` — Run tests
+
+## Git Conventions
+- Use [Conventional Commits](https://www.conventionalcommits.org/)
+- Format: `<type>: <description>`
+- Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+- Examples:
+  - `feat: add image support for feishu post messages`
+  - `fix: resolve daemon restart on launchd stop`
+  - `docs: document bun + lark sdk stream issue`
 
 ## Architecture
 ```
