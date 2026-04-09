@@ -1,3 +1,4 @@
+import * as path from "path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { FrailConfig } from "../config/schema";
 import {
@@ -33,8 +34,6 @@ export type StreamCallback = (event: StreamEvent) => void;
 function buildSystemPrompt(config: FrailConfig): string {
   const base = `You are an interactive coding assistant.
 
-You have EXACTLY 3 tools: Read, Glob, Grep. You have NO other tools. Do NOT mention Bash, Edit, Write, Agent, Gmail, Google Calendar, or any tool not listed here.
-
 Responsibilities:
 1. Answer coding, architecture, debugging questions.
 2. Analyze code by reading files and searching the codebase.
@@ -62,6 +61,34 @@ function buildEnv(config: FrailConfig): Record<string, string | undefined> {
   };
 }
 
+function buildCanUseTool(workDir: string) {
+  const resolved = path.resolve(workDir);
+
+  return async (
+    toolName: string,
+    input: Record<string, unknown>,
+    _options: {
+      signal: AbortSignal;
+      suggestions?: unknown[];
+      blockedPath?: string;
+      decisionReason?: string;
+      toolUseID: string;
+      agentID?: string;
+    },
+  ): Promise<{ behavior: "allow" } | { behavior: "deny"; message: string }> => {
+    // Check file_path (Read), path (Glob/Grep), command (Bash)
+    const filePath = (input.file_path ?? input.path ?? "") as string;
+    if (filePath) {
+      const abs = path.isAbsolute(filePath) ? filePath : path.resolve(resolved, filePath);
+      const resolvedPath = path.resolve(abs);
+      if (!resolvedPath.startsWith(resolved + "/") && resolvedPath !== resolved) {
+        return { behavior: "deny", message: `Access denied: ${filePath} is outside workDir` };
+      }
+    }
+    return { behavior: "allow" };
+  };
+}
+
 function buildCommonOptions(config: FrailConfig) {
   return {
     model: config.provider.model,
@@ -69,11 +96,11 @@ function buildCommonOptions(config: FrailConfig) {
     env: buildEnv(config),
     cwd: config.workDir,
     maxTurns: config.agent.maxTurns,
-    tools: ["Read", "Glob", "Grep"] as string[],
-    allowedTools: ["Read", "Glob", "Grep"] as string[],
-    permissionMode: "bypassPermissions" as const,
+    tools: ["Bash", "Read", "Glob", "Grep"] as string[],
+    allowedTools: [] as string[],  // empty → all tools go through canUseTool
+    permissionMode: "default" as const,
+    canUseTool: buildCanUseTool(config.workDir),
     disallowedTools: [
-      "Bash",
       "Edit",
       "Write",
       "NotebookEdit",
@@ -82,8 +109,15 @@ function buildCommonOptions(config: FrailConfig) {
       "mcp__claude_ai_Gmail__authenticate",
       "mcp__claude_ai_Google_Calendar__authenticate",
     ],
-    thinking: { type: "disabled" as const },
+    thinking: { type: "enabled" as const },
     mcpServers: Object.keys(config.mcpServers).length > 0 ? config.mcpServers : {},
+    sandbox: {
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      filesystem: {
+        denyWrite: ["/**"],
+      },
+    },
   };
 }
 
