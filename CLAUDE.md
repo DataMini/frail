@@ -49,40 +49,62 @@ frail attach (TUI)
 ## Project Structure
 ```
 src/
-├── cli.tsx              # Entry point, subcommand routing
+├── cli.tsx                # Entry point, subcommand routing
 ├── daemon/
-│   ├── index.ts         # Daemon main loop
-│   ├── session.ts       # AgentSession class (single SDK session)
-│   ├── ipc-server.ts    # Unix socket server
-│   ├── ipc-client.ts    # Unix socket client (for attach)
-│   ├── process.ts       # PID file, start/stop daemon
-│   └── logger.ts        # File-based logger
-├── ai/agent.ts          # query() options builder (shared)
+│   ├── index.ts           # Daemon main loop
+│   ├── session.ts         # AgentSession class (single SDK session)
+│   ├── ipc-server.ts      # Unix socket server
+│   ├── ipc-client.ts      # Unix socket client (for attach)
+│   ├── process.ts         # PID file, start/stop daemon
+│   ├── launchd.ts         # macOS LaunchAgent management
+│   └── logger.ts          # File-based logger
 ├── config/
-│   ├── schema.ts        # Zod config schema
-│   └── loader.ts        # cosmiconfig + env loading
-├── db/threads.ts        # SQLite: threads, messages, daemon_state, session_messages
+│   ├── schema.ts          # Zod config schema
+│   └── loader.ts          # cosmiconfig + env loading
+├── db/threads.ts          # SQLite: threads, messages, daemon_state, session_messages
+├── hooks/
+│   └── useConfig.ts       # React hook for config access
 ├── components/
-│   ├── AttachView.tsx    # TUI for attached mode
-│   ├── MessageList.tsx   # Message rendering (source tags)
-│   ├── InputBar.tsx      # Text input with slash completions
-│   ├── StatusBar.tsx     # Model, session, feishu status
-│   └── ...              # SetupWizard, ConfigPanel, etc.
+│   ├── AttachView.tsx      # TUI for attached mode
+│   ├── MessageList.tsx     # Message rendering (source tags)
+│   ├── InputBar.tsx        # Text input with slash completions
+│   ├── StatusBar.tsx       # Model, session, feishu status
+│   ├── ThreadList.tsx      # Thread listing and selection
+│   ├── ConfigPanel.tsx     # Config viewing/editing UI
+│   └── SetupWizard.tsx     # Interactive setup wizard
 ├── feishu/
-│   ├── client.ts        # Lark WSClient, image download
-│   └── handler.ts       # Message handler → session.chat()
-└── commands/index.ts    # Slash command registry
+│   ├── client.ts           # Lark WSClient, image download
+│   └── handler.ts          # Message handler → session.chat()
+└── commands/index.ts       # Slash command registry
 ```
 
 ## Config (`~/.config/frail/config.yaml`)
 ```yaml
+systemPrompt: ""           # Custom system instructions
+workDir: "."               # Project root for agent file access
+
 provider:
   model: claude-sonnet-4-20250514
-  apiKey: ""       # or ANTHROPIC_API_KEY env
-  baseURL: ""      # or ANTHROPIC_BASE_URL env
+  apiKey: ""               # or ANTHROPIC_API_KEY env
+  baseURL: ""              # or ANTHROPIC_BASE_URL env
+
 feishu:
   enabled: false
-  appId: ""        # or FEISHU_APP_ID env
-  appSecret: ""    # or FEISHU_APP_SECRET env
-  domain: feishu   # or lark
+  appId: ""                # or FEISHU_APP_ID env
+  appSecret: ""            # or FEISHU_APP_SECRET env
+  domain: feishu           # or lark
+
+conversation:
+  maxMessages: 50          # Max messages kept in history
+  ttlMinutes: 30           # Message time-to-live
+
+agent:
+  timeoutMinutes: 5        # Agent response timeout
+  maxTurns: ~              # Max conversation turns (optional)
+
+mcpServers:                # HTTP-based MCP servers
+  linear:
+    url: "https://mcp.linear.app/mcp"
+    headers:
+      Authorization: "Bearer <linear-api-key>"
 ```

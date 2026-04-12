@@ -41,64 +41,7 @@ export async function loadConfig(): Promise<FrailConfig> {
     // No config file found, use defaults
   }
 
-  // Env vars override config file
-  const envOverrides: Record<string, unknown> = {};
-
-  if (process.env.PROJECT_ROOT) {
-    envOverrides.workDir = process.env.PROJECT_ROOT;
-  }
-
-  // Provider env overrides
-  {
-    const fileProv =
-      (fileConfig.provider as Record<string, unknown> | undefined) ?? {};
-    const provOverrides: Record<string, unknown> = { ...fileProv };
-    let changed = false;
-
-    if (process.env.ANTHROPIC_API_KEY) {
-      provOverrides.apiKey = process.env.ANTHROPIC_API_KEY;
-      changed = true;
-    }
-    if (process.env.ANTHROPIC_AUTH_TOKEN && !provOverrides.apiKey) {
-      provOverrides.apiKey = process.env.ANTHROPIC_AUTH_TOKEN;
-      changed = true;
-    }
-    if (process.env.ANTHROPIC_BASE_URL) {
-      provOverrides.baseURL = process.env.ANTHROPIC_BASE_URL;
-      changed = true;
-    }
-    if (process.env.ANTHROPIC_MODEL) {
-      provOverrides.model = process.env.ANTHROPIC_MODEL;
-      changed = true;
-    }
-
-    if (changed) {
-      envOverrides.provider = provOverrides;
-    }
-  }
-
-  // Feishu env overrides
-  if (process.env.FEISHU_APP_ID || process.env.FEISHU_APP_SECRET) {
-    const feishuFile =
-      (fileConfig.feishu as Record<string, unknown> | undefined) ?? {};
-    envOverrides.feishu = {
-      ...feishuFile,
-      ...(process.env.FEISHU_APP_ID && { appId: process.env.FEISHU_APP_ID }),
-      ...(process.env.FEISHU_APP_SECRET && {
-        appSecret: process.env.FEISHU_APP_SECRET,
-      }),
-      enabled:
-        !!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) ||
-        (feishuFile as Record<string, unknown>).enabled === true,
-    };
-  }
-
-  const merged = { ...fileConfig, ...envOverrides };
-  // Backward compat: projectRoot → workDir
-  if ("projectRoot" in merged && !("workDir" in merged)) {
-    (merged as any).workDir = (merged as any).projectRoot;
-  }
-  currentConfig = frailConfigSchema.parse(merged);
+  currentConfig = frailConfigSchema.parse(fileConfig);
   return currentConfig;
 }
 

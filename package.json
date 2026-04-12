@@ -1,8 +1,16 @@
 {
   "name": "frail",
+  "version": "0.1.0",
+  "description": "Daemon-first AI chat tool with Feishu bot integration, built with Bun + Ink + Claude Agent SDK",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DataMini/frail.git"
+  },
+  "homepage": "https://github.com/DataMini/frail",
+  "keywords": ["ai", "chat", "cli", "daemon", "feishu", "lark", "claude", "tui", "ink", "bun"],
   "module": "src/cli.tsx",
   "type": "module",
-  "private": true,
   "bin": {
     "frail": "src/cli.tsx"
   },
