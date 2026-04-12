@@ -8,10 +8,15 @@ export interface ToolCallInfo {
   status?: "running" | "done";
 }
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool"; toolCall: ToolCallInfo };
+
 export interface DisplayMessage {
   role: "user" | "assistant" | "system";
   content: string;
   toolCalls?: ToolCallInfo[];
+  blocks?: ContentBlock[];
   source?: "feishu" | "tui";
 }
 
@@ -51,6 +56,19 @@ function ToolCallLine({ tc }: { tc: ToolCallInfo }) {
   );
 }
 
+function legacyToBlocks(message: DisplayMessage): ContentBlock[] {
+  const result: ContentBlock[] = [];
+  if (message.toolCalls) {
+    for (const tc of message.toolCalls) {
+      result.push({ type: "tool", toolCall: tc });
+    }
+  }
+  if (message.content) {
+    result.push({ type: "text", text: message.content });
+  }
+  return result;
+}
+
 function MessageBubble({
   message,
   streaming,
@@ -71,19 +89,27 @@ function MessageBubble({
     );
   }
 
+  const blocks = message.blocks ?? legacyToBlocks(message);
+
   return (
     <Box flexDirection="column" marginBottom={1}>
-      {message.toolCalls?.map((tc, i) => (
-        <ToolCallLine key={i} tc={tc} />
-      ))}
-      {message.content ? (
-        <Box marginLeft={2}>
-          <Text wrap="wrap">
-            {message.content}
-            {streaming && <Text dimColor>▌</Text>}
-          </Text>
-        </Box>
-      ) : null}
+      {blocks.map((block, i) => {
+        if (block.type === "tool") {
+          return <ToolCallLine key={i} tc={block.toolCall} />;
+        }
+        return block.text ? (
+          <Box key={i} marginLeft={2}>
+            <Text wrap="wrap">
+              {block.text}
+              {streaming && i === blocks.length - 1 && <Text dimColor>▌</Text>}
+            </Text>
+          </Box>
+        ) : streaming && i === blocks.length - 1 ? (
+          <Box key={i} marginLeft={2}>
+            <Text dimColor>▌</Text>
+          </Box>
+        ) : null;
+      })}
     </Box>
   );
 }

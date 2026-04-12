@@ -72,6 +72,13 @@ function getDb(): Database {
     db.run(
       `CREATE INDEX IF NOT EXISTS idx_session_messages ON session_messages(session_id, created_at)`
     );
+
+    // Migration: add blocks column for ordered content blocks
+    try {
+      db.run(`ALTER TABLE session_messages ADD COLUMN blocks TEXT`);
+    } catch {
+      // Column already exists
+    }
   }
   return db;
 }
@@ -191,6 +198,7 @@ export interface SessionMessage {
   content: string;
   source: "feishu" | "tui";
   toolCalls?: string;
+  blocks?: string;
   createdAt: number;
 }
 
@@ -199,12 +207,13 @@ export function addSessionMessage(
   role: "user" | "assistant",
   content: string,
   source: "feishu" | "tui",
-  toolCalls?: string
+  toolCalls?: string,
+  blocks?: string
 ): void {
   const d = getDb();
   d.run(
-    "INSERT INTO session_messages (session_id, role, content, source, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [sessionId, role, content, source, toolCalls ?? null, Date.now()]
+    "INSERT INTO session_messages (session_id, role, content, source, tool_calls, blocks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [sessionId, role, content, source, toolCalls ?? null, blocks ?? null, Date.now()]
   );
 }
 
@@ -214,8 +223,8 @@ export function getSessionMessages(
 ): SessionMessage[] {
   const d = getDb();
   const sql = limit
-    ? "SELECT role, content, source, tool_calls as toolCalls, created_at as createdAt FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?"
-    : "SELECT role, content, source, tool_calls as toolCalls, created_at as createdAt FROM session_messages WHERE session_id = ? ORDER BY created_at ASC";
+    ? "SELECT role, content, source, tool_calls as toolCalls, blocks, created_at as createdAt FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?"
+    : "SELECT role, content, source, tool_calls as toolCalls, blocks, created_at as createdAt FROM session_messages WHERE session_id = ? ORDER BY created_at ASC";
   const args = limit ? [sessionId, limit] : [sessionId];
   return d.query(sql).all(...args) as SessionMessage[];
 }

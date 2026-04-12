@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Box, Text, useApp } from "ink";
-import { MessageList, type DisplayMessage } from "./MessageList";
+import { MessageList, type DisplayMessage, type ContentBlock } from "./MessageList";
 import { InputBar } from "./InputBar";
 import { StatusBar } from "./StatusBar";
 import { IPCClient } from "../daemon/ipc-client";
-import type { ToolCallInfo } from "./MessageList";
 
 export function AttachView() {
   const { exit } = useApp();
@@ -16,8 +15,7 @@ export function AttachView() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<IPCClient | null>(null);
-  const streamTextRef = useRef("");
-  const streamToolsRef = useRef<ToolCallInfo[]>([]);
+  const streamBlocksRef = useRef<ContentBlock[]>([]);
 
   useEffect(() => {
     const ipc = new IPCClient();
@@ -30,6 +28,7 @@ export function AttachView() {
           content: m.content,
           source: m.source,
           toolCalls: m.toolCalls,
+          blocks: m.blocks,
         }))
       );
     });
@@ -52,38 +51,53 @@ export function AttachView() {
 
     ipc.on("stream_start", () => {
       setIsLoading(true);
-      streamTextRef.current = "";
-      streamToolsRef.current = [];
-      setStreaming({ role: "assistant", content: "" });
+      streamBlocksRef.current = [];
+      setStreaming({ role: "assistant", content: "", blocks: [] });
     });
 
     ipc.on("stream_delta", (data: any) => {
-      streamTextRef.current += data.text || "";
+      const blocks = streamBlocksRef.current;
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === "text") {
+        last.text += data.text || "";
+      } else {
+        blocks.push({ type: "text", text: data.text || "" });
+      }
+      const fullText = blocks
+        .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join("\n\n");
       setStreaming({
         role: "assistant",
-        content: streamTextRef.current,
-        toolCalls: [...streamToolsRef.current],
+        content: fullText,
+        blocks: [...blocks],
       });
     });
 
     ipc.on("stream_tool", (data: any) => {
-      const existing = streamToolsRef.current.find(
-        (tc) => tc.name === data.name && tc.status === "running"
-      );
-      if (existing) {
-        existing.status = data.status;
-        if (data.args) existing.args = data.args;
-      } else {
-        streamToolsRef.current.push({
-          name: data.name,
-          args: data.args,
-          status: data.status,
+      const blocks = streamBlocksRef.current;
+      if (data.status === "running") {
+        blocks.push({
+          type: "tool",
+          toolCall: { name: data.name, args: data.args, status: "running" },
         });
+      } else {
+        const existing = blocks.find(
+          (b) => b.type === "tool" && b.toolCall.name === data.name && b.toolCall.status === "running"
+        );
+        if (existing && existing.type === "tool") {
+          existing.toolCall.status = data.status;
+          if (data.args) existing.toolCall.args = data.args;
+        }
       }
+      const fullText = blocks
+        .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join("\n\n");
       setStreaming({
         role: "assistant",
-        content: streamTextRef.current,
-        toolCalls: [...streamToolsRef.current],
+        content: fullText,
+        blocks: [...blocks],
       });
     });
 
@@ -96,6 +110,7 @@ export function AttachView() {
           role: "assistant" as const,
           content: data.fullText || "",
           toolCalls: data.toolCalls,
+          blocks: data.blocks,
         },
       ]);
     });

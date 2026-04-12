@@ -10,13 +10,14 @@ import {
   getSessionMessageCount,
 } from "../db/threads";
 import { getLogger } from "./logger";
-import type { ToolCallInfo } from "../components/MessageList";
+import type { ToolCallInfo, ContentBlock } from "../components/MessageList";
 
 export interface SessionDisplayMessage {
   role: "user" | "assistant";
   content: string;
   source?: "feishu" | "tui";
   toolCalls?: ToolCallInfo[];
+  blocks?: ContentBlock[];
 }
 
 export interface StreamEvent {
@@ -27,6 +28,7 @@ export interface StreamEvent {
   status?: "running" | "done";
   fullText?: string;
   toolCalls?: ToolCallInfo[];
+  blocks?: ContentBlock[];
 }
 
 export type StreamCallback = (event: StreamEvent) => void;
@@ -75,7 +77,7 @@ function buildCanUseTool(workDir: string) {
       toolUseID: string;
       agentID?: string;
     },
-  ): Promise<{ behavior: "allow" } | { behavior: "deny"; message: string }> => {
+  ): Promise<{ behavior: "allow"; updatedInput?: Record<string, unknown> } | { behavior: "deny"; message: string }> => {
     // Check file_path (Read), path (Glob/Grep), command (Bash)
     const filePath = (input.file_path ?? input.path ?? "") as string;
     if (filePath) {
@@ -85,7 +87,7 @@ function buildCanUseTool(workDir: string) {
         return { behavior: "deny", message: `Access denied: ${filePath} is outside workDir` };
       }
     }
-    return { behavior: "allow" };
+    return { behavior: "allow", updatedInput: input };
   };
 }
 
@@ -95,7 +97,7 @@ function buildCommonOptions(config: FrailConfig) {
     systemPrompt: buildSystemPrompt(config),
     env: buildEnv(config),
     cwd: config.workDir,
-    maxTurns: config.agent.maxTurns,
+    ...(config.agent.maxTurns !== undefined && { maxTurns: config.agent.maxTurns }),
     tools: ["Bash", "Read", "Glob", "Grep"] as string[],
     allowedTools: [] as string[],  // empty → all tools go through canUseTool
     permissionMode: "default" as const,
@@ -157,6 +159,7 @@ export class AgentSession {
         content: m.content,
         source: m.source as "feishu" | "tui",
         toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
+        blocks: m.blocks ? JSON.parse(m.blocks) : undefined,
       }));
       this.messageCount = getSessionMessageCount(savedId);
       getLogger().info("Session", `Resumed session ${savedId} with ${this.messageCount} messages`);
@@ -220,8 +223,7 @@ export class AgentSession {
 
       onStream?.({ type: "stream_start" });
 
-      let fullText = "";
-      const toolCalls: ToolCallInfo[] = [];
+      const blocks: ContentBlock[] = [];
 
       try {
         for await (const msg of query({
@@ -246,36 +248,42 @@ export class AgentSession {
                     args: summarizeArgs(block.input),
                     status: "running",
                   };
-                  toolCalls.push(tc);
+                  blocks.push({ type: "tool", toolCall: tc });
                   onStream?.({
                     type: "stream_tool",
                     name: tc.name,
                     args: tc.args,
                     status: "running",
                   });
+                } else if (block?.type === "text") {
+                  blocks.push({ type: "text", text: "" });
                 }
               }
 
               if (event.type === "content_block_delta" && "delta" in event) {
                 const delta = event.delta;
                 if (delta.type === "text_delta") {
-                  fullText += (delta as any).text;
-                  onStream?.({ type: "stream_delta", text: (delta as any).text });
+                  const text = (delta as any).text;
+                  const last = blocks[blocks.length - 1];
+                  if (last && last.type === "text") {
+                    last.text += text;
+                  } else {
+                    blocks.push({ type: "text", text });
+                  }
+                  onStream?.({ type: "stream_delta", text });
                 }
               }
 
               if (event.type === "content_block_stop") {
-                if (toolCalls.length > 0) {
-                  const last = toolCalls[toolCalls.length - 1]!;
-                  if (last.status === "running") {
-                    last.status = "done";
-                    onStream?.({
-                      type: "stream_tool",
-                      name: last.name,
-                      args: last.args,
-                      status: "done",
-                    });
-                  }
+                const last = blocks[blocks.length - 1];
+                if (last?.type === "tool" && last.toolCall.status === "running") {
+                  last.toolCall.status = "done";
+                  onStream?.({
+                    type: "stream_tool",
+                    name: last.toolCall.name,
+                    args: last.toolCall.args,
+                    status: "done",
+                  });
                 }
               }
               break;
@@ -283,35 +291,33 @@ export class AgentSession {
             case "assistant": {
               const content = msg.message?.content;
               if (Array.isArray(content)) {
-                let msgText = "";
                 for (const block of content) {
-                  if (block.type === "text") {
-                    msgText = block.text;
-                  } else if (block.type === "tool_use") {
-                    const existing = toolCalls.find(
-                      (tc) => tc.name === block.name && tc.status === "running"
+                  if (block.type === "tool_use") {
+                    const existing = blocks.find(
+                      (b) => b.type === "tool" && b.toolCall.name === block.name && b.toolCall.status === "running"
                     );
-                    if (existing) {
-                      existing.args = summarizeArgs(block.input);
-                      existing.status = "done";
-                    } else {
-                      toolCalls.push({
-                        name: block.name,
-                        args: summarizeArgs(block.input),
-                        status: "done",
-                      });
+                    if (existing && existing.type === "tool") {
+                      existing.toolCall.args = summarizeArgs(block.input);
+                      existing.toolCall.status = "done";
                     }
                   }
                 }
-                if (msgText) fullText = msgText;
               }
               break;
             }
             case "result": {
               if ("subtype" in msg && msg.subtype === "success") {
-                fullText = (msg as any).result;
+                const resultText = (msg as any).result;
+                if (resultText) {
+                  const lastText = [...blocks].reverse().find((b) => b.type === "text");
+                  if (lastText && lastText.type === "text") {
+                    lastText.text = resultText;
+                  } else {
+                    blocks.push({ type: "text", text: resultText });
+                  }
+                }
               } else if ("is_error" in msg && (msg as any).is_error) {
-                fullText = `Error: ${(msg as any).error ?? "Unknown error"}`;
+                blocks.push({ type: "text", text: `Error: ${(msg as any).error ?? "Unknown error"}` });
               }
               break;
             }
@@ -319,15 +325,21 @@ export class AgentSession {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("API key")) {
-          fullText = `Error: ${errMsg}\n\nRun 'frail init' to configure your API key.`;
-        } else {
-          fullText = fullText
-            ? fullText + `\n\nError: ${errMsg}`
-            : `Error: ${errMsg}`;
-        }
+        const errorText = errMsg.includes("API key")
+          ? `Error: ${errMsg}\n\nRun 'frail init' to configure your API key.`
+          : `Error: ${errMsg}`;
+        blocks.push({ type: "text", text: errorText });
         log.error("Session", `Error: ${errMsg}`);
       }
+
+      // Derive fullText and toolCalls from blocks for backward compat
+      const fullText = blocks
+        .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join("\n\n");
+      const toolCalls = blocks
+        .filter((b): b is Extract<ContentBlock, { type: "tool" }> => b.type === "tool")
+        .map((b) => b.toolCall);
 
       // Mark remaining running tools as done
       for (const tc of toolCalls) {
@@ -339,6 +351,7 @@ export class AgentSession {
         role: "assistant",
         content: fullText,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        blocks: blocks.length > 0 ? blocks : undefined,
       };
       this.history.push(assistantMsg);
       this.messageCount++;
@@ -348,10 +361,11 @@ export class AgentSession {
         "assistant",
         fullText,
         source,
-        toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined
+        toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
+        blocks.length > 0 ? JSON.stringify(blocks) : undefined
       );
 
-      onStream?.({ type: "stream_end", fullText, toolCalls });
+      onStream?.({ type: "stream_end", fullText, toolCalls, blocks });
 
       log.info("Session", `Assistant: ${fullText.slice(0, 100)}${fullText.length > 100 ? "..." : ""}`);
 
