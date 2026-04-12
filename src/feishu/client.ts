@@ -6,12 +6,7 @@ import { createFeishuHandler } from "./handler";
 import { getLogger } from "../daemon/logger";
 import type { AgentSession } from "../daemon/session";
 
-const CONFIG_DIR = path.join(
-  process.env.HOME || process.env.USERPROFILE || "~",
-  ".config",
-  "frail"
-);
-const UPLOADS_DIR = path.join(CONFIG_DIR, "uploads");
+// Uploads dir is set per-session inside startFeishuClient based on config.workDir
 
 let wsClient: Lark.WSClient | null = null;
 export type FeishuConnectionStatus = "not configured" | "connecting" | "connected" | "error";
@@ -42,6 +37,8 @@ export function startFeishuClient(
     appType: Lark.AppType.SelfBuild,
     domain,
   });
+
+  const uploadsDir = path.join(config.workDir, ".frail", "uploads");
 
   feishuStatus = "connecting";
   firstMessageReceived = false;
@@ -80,7 +77,7 @@ export function startFeishuClient(
         } else if (message_type === "image") {
           try {
             const imageKey = JSON.parse(content).image_key;
-            const localPath = await downloadImage(config.feishu.appId, config.feishu.appSecret, message_id, imageKey);
+            const localPath = await downloadImage(config.feishu.appId, config.feishu.appSecret, message_id, imageKey, uploadsDir);
             const text = `[用户发送了一张图片，已保存到 ${localPath}，请用 Read 工具查看并分析]`;
             onMessage({ chatId: chat_id, messageId: message_id, text, senderId }).catch(
               (err: unknown) => log.error("Feishu", `Handler error: ${err}`)
@@ -99,7 +96,7 @@ export function startFeishuClient(
               try {
                 log.info("Feishu", `Downloading image: ${key}`);
                 const p = await Promise.race([
-                  downloadImage(config.feishu.appId, config.feishu.appSecret, message_id, key),
+                  downloadImage(config.feishu.appId, config.feishu.appSecret, message_id, key, uploadsDir),
                   new Promise<never>((_, reject) =>
                     setTimeout(() => reject(new Error("Download timeout (10s)")), 10000)
                 ),
@@ -229,10 +226,11 @@ async function downloadImage(
   appId: string,
   appSecret: string,
   messageId: string,
-  fileKey: string
+  fileKey: string,
+  uploadsDir: string,
 ): Promise<string> {
   const log = getLogger();
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  fs.mkdirSync(uploadsDir, { recursive: true });
 
   const token = await getTenantToken(appId, appSecret);
   const url = `https://open.feishu.cn/open-apis/im/v1/messages/${messageId}/resources/${fileKey}?type=image`;
@@ -250,7 +248,7 @@ async function downloadImage(
 
   const contentType = resp.headers.get("content-type") || "image/png";
   const ext = contentType.includes("jpeg") ? "jpg" : "png";
-  const filePath = path.join(UPLOADS_DIR, `${Date.now()}_${fileKey}.${ext}`);
+  const filePath = path.join(uploadsDir, `${Date.now()}_${fileKey}.${ext}`);
 
   const buf = await resp.arrayBuffer();
   fs.writeFileSync(filePath, Buffer.from(buf));
