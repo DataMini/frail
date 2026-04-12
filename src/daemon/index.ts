@@ -7,6 +7,7 @@ import { createIPCServer, type IPCServer } from "./ipc-server";
 import { startFeishuClient, stopFeishuClient } from "../feishu/client";
 
 let ipc: IPCServer | null = null;
+let session: AgentSession | null = null;
 
 function cleanup() {
   const log = getLogger();
@@ -15,6 +16,10 @@ function cleanup() {
   if (ipc) {
     ipc.close();
     ipc = null;
+  }
+  if (session) {
+    session.destroy();
+    session = null;
   }
   stopFeishuClient();
   closeDb();
@@ -47,7 +52,7 @@ export async function runDaemon() {
   log.info("Daemon", "Starting...");
 
   const config = await loadConfig();
-  const session = new AgentSession(config);
+  session = new AgentSession(config);
   ipc = createIPCServer(session);
 
   // Start Feishu if configured

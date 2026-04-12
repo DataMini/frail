@@ -1,5 +1,5 @@
 import * as path from "path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { FrailConfig } from "../config/schema";
 import {
   getDaemonState,
@@ -34,16 +34,51 @@ export interface StreamEvent {
 export type StreamCallback = (event: StreamEvent) => void;
 
 function buildSystemPrompt(config: FrailConfig): string {
-  const base = `You are an interactive coding assistant.
+  const hasLinear = !!config.mcpServers?.linear;
 
-Responsibilities:
-1. Answer coding, architecture, debugging questions.
-2. Analyze code by reading files and searching the codebase.
-3. Keep responses concise and readable.
+  const base = `You are Frail, a technical assistant that receives user-reported problems, helps analyze and resolve them, and tracks confirmed issues.
+
+## Response Rules
+
+1. **Extremely brief** — Every reply must be as short as possible. State the key point directly. No code snippets, no file paths, no verbose explanations. If the answer is one sentence, don't write two.
+2. **Research before responding** — You MUST thoroughly read and investigate the codebase before every reply. Read all relevant files, trace the full call chain, search broadly. Any reply not backed by actual code investigation is unacceptable. Think deeply and long enough to fully understand the problem before answering.
+3. **Respond in the same language the user uses.**
+
+## Core Workflow
+
+Users will describe various problems: bugs, unexpected behavior, errors, feature requests, etc. Follow this workflow:
+
+1. **Clarify** — If the problem description is vague or incomplete, ask targeted questions.
+2. **Diagnose** — Extensively read code, search the codebase, trace logic. Never guess — always verify against the actual code first.
+3. **Conclude** — State your finding in one or two sentences. Confirmed problem, misunderstanding, or needs more info.
+4. **Record** — If the problem is confirmed or the user asks you to track it, create a Linear issue.
+
+## Project Context
 
 Project root: ${config.workDir}
+${hasLinear ? `
+## Linear — Issue Tracking
 
-Respond in the same language the user uses.`;
+You have Linear MCP tools available. **Actively use them** — they are your primary way to record and manage work items.
+
+### When to create an issue
+- You confirmed a real bug or problem through investigation
+- The user reports a feature request or enhancement
+- The user explicitly asks to record/track/create a ticket
+- The user describes a TODO, requirement, or task they want tracked
+
+### When NOT to create an issue
+- You're still diagnosing and haven't confirmed anything yet
+- The problem turns out to be a misunderstanding or user error (explain instead)
+- It's a simple question you can answer directly
+
+### How to use Linear tools
+- **Search first** — before creating, search existing issues to avoid duplicates
+- **Create with context** — use a clear title describing the problem, include steps to reproduce, error messages, relevant code paths
+- **Share the result** — after creating, tell the user the issue title and identifier
+- **Update existing issues** — when new information is discovered during conversation, update the relevant issue
+- **List issues** — when the user asks about backlog, current tasks, or priorities
+` : ''}`;
 
   if (config.systemPrompt) {
     return `${base}\n\n--- User Custom Instructions ---\n${config.systemPrompt}`;
@@ -144,6 +179,10 @@ export class AgentSession {
   private history: SessionDisplayMessage[];
   private lock: Promise<void> = Promise.resolve();
   private busy = false;
+  private lastMcpStatus: "connected" | "failed" | "unknown" = "unknown";
+  private lastMcpError: string | null = null;
+  private monitorQuery: Query | null = null;
+  private monitorTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: FrailConfig) {
     this.config = config;
@@ -192,6 +231,89 @@ export class AgentSession {
     return this.config;
   }
 
+  getMcpStatus(): { status: string; error: string | null } {
+    return { status: this.lastMcpStatus, error: this.lastMcpError };
+  }
+
+  private async ensureMcpConnected(q: Query): Promise<boolean> {
+    const log = getLogger();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const statuses = await q.mcpServerStatus();
+        const linear = statuses.find((s) => s.name === "linear");
+        if (linear?.status === "connected") {
+          this.lastMcpStatus = "connected";
+          this.lastMcpError = null;
+          return true;
+        }
+        // Status is not connected — attempt reconnection
+        log.warn("MCP", `Linear status: ${linear?.status ?? "not found"} (attempt ${attempt + 1}/3), reconnecting...`);
+        await q.reconnectMcpServer("linear");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.lastMcpError = msg;
+        log.error("MCP", `Reconnect attempt ${attempt + 1}/3 failed: ${msg}`);
+      }
+      if (attempt < 2) await Bun.sleep(1000 * (attempt + 1));
+    }
+    this.lastMcpStatus = "failed";
+    return false;
+  }
+
+  private startMonitor(): void {
+    this.stopMonitor();
+    if (!this.config.mcpServers.linear || !this.monitorQuery) return;
+
+    const log = getLogger();
+    this.monitorTimer = setInterval(async () => {
+      if (!this.monitorQuery) return;
+      try {
+        const statuses = await this.monitorQuery.mcpServerStatus();
+        const linear = statuses.find((s) => s.name === "linear");
+        const prev = this.lastMcpStatus;
+
+        if (linear?.status === "connected") {
+          this.lastMcpStatus = "connected";
+          this.lastMcpError = null;
+          if (prev !== "connected") {
+            log.info("MCP", "Linear MCP reconnected");
+          }
+        } else {
+          log.warn("MCP", `Linear MCP status: ${linear?.status ?? "not found"}, attempting reconnect...`);
+          try {
+            await this.monitorQuery.reconnectMcpServer("linear");
+            this.lastMcpStatus = "connected";
+            this.lastMcpError = null;
+            log.info("MCP", "Linear MCP reconnected via monitor");
+          } catch (err) {
+            this.lastMcpStatus = "failed";
+            this.lastMcpError = err instanceof Error ? err.message : String(err);
+            log.error("MCP", `Monitor reconnect failed: ${this.lastMcpError}`);
+          }
+        }
+      } catch {
+        // Query object is no longer valid — clean up
+        this.monitorQuery = null;
+        this.stopMonitor();
+      }
+    }, 30_000);
+  }
+
+  private stopMonitor(): void {
+    if (this.monitorTimer) {
+      clearInterval(this.monitorTimer);
+      this.monitorTimer = null;
+    }
+  }
+
+  destroy(): void {
+    this.stopMonitor();
+    if (this.monitorQuery) {
+      this.monitorQuery.close();
+      this.monitorQuery = null;
+    }
+  }
+
   private withLock<T>(fn: () => Promise<T>): Promise<T> {
     const prev = this.lock;
     let resolve: (v: T) => void;
@@ -225,17 +347,44 @@ export class AgentSession {
 
       const blocks: ContentBlock[] = [];
 
+      // Close previous monitor query — new query takes over
+      if (this.monitorQuery) {
+        this.monitorQuery.close();
+        this.monitorQuery = null;
+      }
+      this.stopMonitor();
+
+      const q = query({
+        prompt: text,
+        options: {
+          ...buildCommonOptions(this.config),
+          persistSession: true,
+          sessionId: isResume ? undefined : this.sessionId,
+          resume: isResume ? this.sessionId : undefined,
+          includePartialMessages: true,
+        },
+      });
+
+      // Gate on MCP health — block if Linear is configured but not connected
+      if (this.config.mcpServers.linear) {
+        const ok = await this.ensureMcpConnected(q);
+        if (!ok) {
+          q.close();
+          const errorMsg = `Linear MCP 连接失败: ${this.lastMcpError || "无法连接"}。正在自动重试，请稍后再发送消息。`;
+          blocks.push({ type: "text", text: errorMsg });
+          log.error("Session", `Chat blocked: Linear MCP unavailable`);
+
+          // Don't record failed attempt to history — pop the user message we just added
+          this.history.pop();
+
+          onStream?.({ type: "stream_end", fullText: errorMsg, toolCalls: [], blocks });
+          this.busy = false;
+          return errorMsg;
+        }
+      }
+
       try {
-        for await (const msg of query({
-          prompt: text,
-          options: {
-            ...buildCommonOptions(this.config),
-            persistSession: true,
-            sessionId: isResume ? undefined : this.sessionId,
-            resume: isResume ? this.sessionId : undefined,
-            includePartialMessages: true,
-          },
-        })) {
+        for await (const msg of q) {
           switch (msg.type) {
             case "stream_event": {
               const event = msg.event;
@@ -332,6 +481,10 @@ export class AgentSession {
         log.error("Session", `Error: ${errMsg}`);
       }
 
+      // Keep query alive as MCP monitor
+      this.monitorQuery = q;
+      this.startMonitor();
+
       // Derive fullText and toolCalls from blocks for backward compat
       const fullText = blocks
         .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
@@ -376,10 +529,13 @@ export class AgentSession {
 
   resetSession(): void {
     const log = getLogger();
+    this.destroy();
     clearSessionMessages(this.sessionId);
     this.sessionId = crypto.randomUUID();
     this.messageCount = 0;
     this.history = [];
+    this.lastMcpStatus = "unknown";
+    this.lastMcpError = null;
     setDaemonState("session_id", this.sessionId);
     log.info("Session", `Reset to new session ${this.sessionId}`);
   }
