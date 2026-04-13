@@ -128,6 +128,7 @@ function buildCanUseTool(workDir: string) {
 
 function buildCommonOptions(config: FrailConfig) {
   return {
+    settingSources: [] as const,
     model: config.provider.model,
     systemPrompt: buildSystemPrompt(config),
     env: buildEnv(config),
