@@ -14,26 +14,24 @@ describe("config/schema", () => {
     expect(config.conversation.maxMessages).toBe(50);
     expect(config.conversation.ttlMinutes).toBe(30);
     expect(config.agent.timeoutMinutes).toBe(5);
-    expect(config.agent.maxTurns).toBe(10);
   });
 
   test("respects overrides", () => {
     const config = frailConfigSchema.parse({
       provider: { model: "claude-opus-4-20250515", apiKey: "test-key" },
       feishu: { enabled: true, appId: "abc", appSecret: "def" },
-      agent: { maxTurns: 20 },
+      agent: { timeoutMinutes: 10 },
     });
     expect(config.provider.model).toBe("claude-opus-4-20250515");
     expect(config.provider.apiKey).toBe("test-key");
     expect(config.feishu.enabled).toBe(true);
     expect(config.feishu.appId).toBe("abc");
-    expect(config.agent.maxTurns).toBe(20);
-    expect(config.agent.timeoutMinutes).toBe(5); // default kept
+    expect(config.agent.timeoutMinutes).toBe(10);
   });
 
   test("rejects invalid types", () => {
     expect(() =>
-      frailConfigSchema.parse({ agent: { maxTurns: "not a number" } })
+      frailConfigSchema.parse({ agent: { timeoutMinutes: "not a number" } })
     ).toThrow();
   });
 

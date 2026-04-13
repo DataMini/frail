@@ -15,7 +15,6 @@ type EditField =
   | "baseURL"
   | "workDir"
   | "systemPrompt"
-  | "maxTurns"
   | "timeoutMinutes"
   | "feishuEnabled"
   | "feishuAppId"
@@ -29,7 +28,6 @@ const FIELD_OPTIONS = [
   { label: "Base URL", value: "baseURL" as const },
   { label: "Work Dir", value: "workDir" as const },
   { label: "System Prompt", value: "systemPrompt" as const },
-  { label: "Max Turns", value: "maxTurns" as const },
   { label: "Timeout (minutes)", value: "timeoutMinutes" as const },
   { label: "Feishu Enabled", value: "feishuEnabled" as const },
   { label: "Feishu App ID", value: "feishuAppId" as const },
@@ -63,7 +61,6 @@ export function ConfigPanel({ config, onSave, onBack }: ConfigPanelProps) {
       case "baseURL": return config.provider.baseURL ?? "";
       case "workDir": return config.workDir;
       case "systemPrompt": return config.systemPrompt;
-      case "maxTurns": return String(config.agent.maxTurns);
       case "timeoutMinutes": return String(config.agent.timeoutMinutes);
       case "feishuEnabled": return config.feishu.enabled ? "true" : "false";
       case "feishuAppId": return config.feishu.appId;
@@ -121,9 +118,6 @@ export function ConfigPanel({ config, onSave, onBack }: ConfigPanelProps) {
         break;
       case "systemPrompt":
         updated.systemPrompt = value;
-        break;
-      case "maxTurns":
-        updated.agent = { ...updated.agent, maxTurns: parseInt(value) || 10 };
         break;
       case "timeoutMinutes":
         updated.agent = { ...updated.agent, timeoutMinutes: parseInt(value) || 5 };

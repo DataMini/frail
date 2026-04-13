@@ -100,7 +100,6 @@ conversation:
 
 agent:
   timeoutMinutes: 5        # Agent response timeout
-  maxTurns: ~              # Max conversation turns (optional)
 
 mcpServers:                # HTTP-based MCP servers
   linear:

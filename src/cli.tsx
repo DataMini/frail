@@ -192,7 +192,6 @@ const CONFIG_KEYS: Record<string, { get: (c: any) => string; set: (c: any, v: st
   "systemPrompt":       { get: c => c.systemPrompt,       set: (c, v) => { c.systemPrompt = v; } },
   "feishu.appId":       { get: c => c.feishu.appId,       set: (c, v) => { c.feishu = { ...c.feishu, appId: v }; } },
   "feishu.appSecret":   { get: c => c.feishu.appSecret,   set: (c, v) => { c.feishu = { ...c.feishu, appSecret: v }; }, secret: true },
-  "agent.maxTurns":     { get: c => String(c.agent.maxTurns), set: (c, v) => { c.agent = { ...c.agent, maxTurns: parseInt(v) || 10 }; } },
   "agent.timeoutMinutes": { get: c => String(c.agent.timeoutMinutes), set: (c, v) => { c.agent = { ...c.agent, timeoutMinutes: parseInt(v) || 5 }; } },
   "conversation.maxMessages": { get: c => String(c.conversation.maxMessages), set: (c, v) => { c.conversation = { ...c.conversation, maxMessages: parseInt(v) || 50 }; } },
   "conversation.ttlMinutes":  { get: c => String(c.conversation.ttlMinutes), set: (c, v) => { c.conversation = { ...c.conversation, ttlMinutes: parseInt(v) || 30 }; } },

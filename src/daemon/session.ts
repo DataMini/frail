@@ -132,7 +132,6 @@ function buildCommonOptions(config: FrailConfig) {
     systemPrompt: buildSystemPrompt(config),
     env: buildEnv(config),
     cwd: config.workDir,
-    ...(config.agent.maxTurns !== undefined && { maxTurns: config.agent.maxTurns }),
     tools: ["Bash", "Read", "Glob", "Grep"] as string[],
     allowedTools: [] as string[],  // empty → all tools go through canUseTool
     permissionMode: "default" as const,

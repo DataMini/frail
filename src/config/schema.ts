@@ -14,7 +14,6 @@ const conversationSchema = z.object({
 
 const agentSchema = z.object({
   timeoutMinutes: z.number().default(5),
-  maxTurns: z.number().optional(),
 });
 
 const providerSchema = z.object({
