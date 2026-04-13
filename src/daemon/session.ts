@@ -282,9 +282,18 @@ export class AgentSession {
           log.warn("MCP", `Linear MCP status: ${linear?.status ?? "not found"}, attempting reconnect...`);
           try {
             await this.monitorQuery.reconnectMcpServer("linear");
-            this.lastMcpStatus = "connected";
-            this.lastMcpError = null;
-            log.info("MCP", "Linear MCP reconnected via monitor");
+            const verify = await this.monitorQuery.mcpServerStatus();
+            const check = verify.find((s) => s.name === "linear");
+
+            if (check?.status === "connected") {
+              this.lastMcpStatus = "connected";
+              this.lastMcpError = null;
+              log.info("MCP", "Linear MCP reconnected via monitor");
+            } else {
+              this.lastMcpStatus = "failed";
+              this.lastMcpError = `Reconnect returned status: ${check?.status ?? "not found"}`;
+              log.warn("MCP", `Monitor reconnect did not restore connection: ${check?.status ?? "not found"}`);
+            }
           } catch (err) {
             this.lastMcpStatus = "failed";
             this.lastMcpError = err instanceof Error ? err.message : String(err);
@@ -293,6 +302,8 @@ export class AgentSession {
         }
       } catch {
         // Query object is no longer valid — clean up
+        this.lastMcpStatus = "unknown";
+        this.lastMcpError = "Monitor query expired";
         this.monitorQuery = null;
         this.stopMonitor();
       }
