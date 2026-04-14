@@ -4,7 +4,7 @@
 
 - **Daemon 架构** — 后台常驻进程，TUI 随时 attach/detach，macOS LaunchAgent 开机自启
 - **飞书集成** — WebSocket 实时接收群聊消息（文本、图片、富文本），自动回复
-- **Linear 集成** — 通过 MCP 连接 Linear，搜索、创建和管理 issue
+- **Linear 集成** — 通过 [linear-cli](https://github.com/schpet/linear-cli) 连接 Linear，搜索、创建和管理 issue
 - **代码工具** — 内置文件读取、搜索、沙箱 Bash，让 AI 理解你的代码库
 
 ## 安装
@@ -21,7 +21,7 @@ bun link
 ## 使用
 
 ```bash
-frail init      # 配置向导（API Key / 飞书 / Linear）
+frail init      # 配置向导（API Key / 飞书）
 frail daemon    # 前台启动（开发用）
 frail attach    # 连接 TUI
 frail status    # 查看状态

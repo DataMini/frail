@@ -53,7 +53,6 @@ export function createIPCServer(session: AgentSession): IPCServer {
           busy: session.isBusy(),
           model: session.getConfig().provider.model,
           feishu: getFeishuStatus(),
-          mcp: session.getMcpStatus(),
         });
         break;
       }
@@ -113,7 +112,6 @@ export function createIPCServer(session: AgentSession): IPCServer {
               sessionId: session.getSessionId(),
               busy: session.isBusy(),
               model: session.getConfig().provider.model,
-              mcp: session.getMcpStatus(),
             });
             break;
           default:

@@ -10,8 +10,6 @@ interface SetupWizardProps {
   onComplete: (config: FrailConfig) => void;
 }
 
-const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
-
 const MODEL_PRESETS = [
   "claude-sonnet-4-20250514",
   "claude-haiku-4-5-20251001",
@@ -19,14 +17,8 @@ const MODEL_PRESETS = [
 ];
 
 type TestStatus = "idle" | "testing" | "success" | "error";
-type Step = "llm" | "linear" | "feishu";
-const STEPS: Step[] = ["llm", "linear", "feishu"];
-
-function extractLinearKey(config?: FrailConfig): string {
-  const h = config?.mcpServers?.linear?.headers?.Authorization;
-  if (h?.startsWith("Bearer ")) return h.slice(7);
-  return "";
-}
+type Step = "llm" | "feishu";
+const STEPS: Step[] = ["llm", "feishu"];
 
 function maskKey(val: string): string {
   if (!val) return "(empty)";
@@ -124,7 +116,7 @@ function LlmStep({
 
   return (
     <Box flexDirection="column" padding={1}>
-      <Text bold color="cyan">Step 1/3 — LLM Provider</Text>
+      <Text bold color="cyan">Step 1/2 — LLM Provider</Text>
       <Text dimColor>↑↓ navigate, Enter edit/toggle, t test, n next step</Text>
 
       <Box flexDirection="column" marginTop={1}>
@@ -166,58 +158,7 @@ function LlmStep({
   );
 }
 
-// ─── Step 2: Linear ─────────────────────────────────────
-
-function LinearStep({
-  linearKey, setLinearKey,
-  onNext, onBack,
-}: {
-  linearKey: string; setLinearKey: (v: string) => void;
-  onNext: () => void; onBack: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [inputKey, setInputKey] = useState(0);
-
-  useInput((input, key) => {
-    if (editing) { if (key.escape) setEditing(false); return; }
-    if (key.return) { setEditing(true); setInputKey((k) => k + 1); }
-    else if (input === "n") onNext();
-    else if (input === "b" || key.escape) onBack();
-  });
-
-  return (
-    <Box flexDirection="column" padding={1}>
-      <Text bold color="cyan">Step 2/3 — Linear</Text>
-      <Text dimColor>Enter to edit, n next, b back</Text>
-
-      <Box flexDirection="column" marginTop={1}>
-        {editing ? (
-          <Box>
-            <Text bold color="cyan">{"❯ "}</Text>
-            <Text bold>API Key: </Text>
-            <TextInput key={inputKey} defaultValue={linearKey} onSubmit={(v) => { setLinearKey(v); setEditing(false); }} />
-          </Box>
-        ) : (
-          <Box>
-            <Text bold color="cyan">{"❯ "}</Text>
-            <Text>API Key: </Text>
-            <Text>{linearKey ? maskKey(linearKey) : "(skip)"}</Text>
-            <Text dimColor> (Enter to edit, empty = skip)</Text>
-          </Box>
-        )}
-      </Box>
-
-      <Box marginTop={1}>
-        <Text dimColor>Linear MCP: {LINEAR_MCP_URL}</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>Press <Text bold>n</Text> to continue, <Text bold>b</Text> to go back</Text>
-      </Box>
-    </Box>
-  );
-}
-
-// ─── Step 3: Feishu ─────────────────────────────────────
+// ─── Step 2: Feishu ─────────────────────────────────────
 
 const FEISHU_FIELDS = ["appId", "appSecret"] as const;
 type FeishuField = (typeof FEISHU_FIELDS)[number];
@@ -264,7 +205,7 @@ function FeishuStep({
 
   return (
     <Box flexDirection="column" padding={1}>
-      <Text bold color="cyan">Step 3/3 — Feishu</Text>
+      <Text bold color="cyan">Step 2/2 — Feishu</Text>
       <Text dimColor>↑↓ navigate, Enter edit/toggle, s save, b back</Text>
 
       <Box flexDirection="column" marginTop={1}>
@@ -308,22 +249,11 @@ export function SetupWizard({ initialConfig, onComplete }: SetupWizardProps) {
   const [baseURL, setBaseURL] = useState(initialConfig?.provider.baseURL ?? "");
   const [model, setModel] = useState(initialConfig?.provider.model ?? "claude-sonnet-4-20250514");
 
-  // Linear state
-  const [linearKey, setLinearKey] = useState(extractLinearKey(initialConfig));
-
   // Feishu state
   const [feishuAppId, setFeishuAppId] = useState(initialConfig?.feishu.appId ?? "");
   const [feishuAppSecret, setFeishuAppSecret] = useState(initialConfig?.feishu.appSecret ?? "");
 
   function handleSave() {
-    const mcpServers: Record<string, any> = {};
-    if (linearKey) {
-      mcpServers.linear = {
-        url: LINEAR_MCP_URL,
-        headers: { Authorization: `Bearer ${linearKey}` },
-      };
-    }
-
     const config = frailConfigSchema.parse({
       provider: {
         model,
@@ -336,7 +266,6 @@ export function SetupWizard({ initialConfig, onComplete }: SetupWizardProps) {
         appSecret: feishuAppSecret,
       },
       workDir: process.cwd(),
-      ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
     });
     onComplete(config);
   }
@@ -347,17 +276,7 @@ export function SetupWizard({ initialConfig, onComplete }: SetupWizardProps) {
         apiKey={apiKey} setApiKey={setApiKey}
         baseURL={baseURL} setBaseURL={setBaseURL}
         model={model} setModel={setModel}
-        onNext={() => setStep("linear")}
-      />
-    );
-  }
-
-  if (step === "linear") {
-    return (
-      <LinearStep
-        linearKey={linearKey} setLinearKey={setLinearKey}
         onNext={() => setStep("feishu")}
-        onBack={() => setStep("llm")}
       />
     );
   }
@@ -367,7 +286,7 @@ export function SetupWizard({ initialConfig, onComplete }: SetupWizardProps) {
       appId={feishuAppId} setAppId={setFeishuAppId}
       appSecret={feishuAppSecret} setAppSecret={setFeishuAppSecret}
       onSave={handleSave}
-      onBack={() => setStep("linear")}
+      onBack={() => setStep("llm")}
     />
   );
 }

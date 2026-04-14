@@ -100,10 +100,6 @@ conversation:
 
 agent:
   timeoutMinutes: 5        # Agent response timeout
-
-mcpServers:                # HTTP-based MCP servers
-  linear:
-    url: "https://mcp.linear.app/mcp"
-    headers:
-      Authorization: "Bearer <linear-api-key>"
 ```
+
+Linear integration uses `linear` CLI (https://github.com/schpet/linear-cli). Run `linear auth` to authenticate.
