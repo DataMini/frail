@@ -89,15 +89,6 @@ async function cmdStatus() {
       : fs === "connecting" ? "\x1b[33m"
       : fs === "error" ? "\x1b[31m"
       : "\x1b[90m";
-    const mcp = data.mcp;
-    const mcpLabel = !mcp ? "not configured"
-      : mcp.status === "connected" ? "connected"
-      : mcp.status === "failed" ? `failed (${mcp.error || "unknown"})`
-      : "unknown";
-    const mcpColor = !mcp ? "\x1b[90m"
-      : mcp.status === "connected" ? "\x1b[32m"
-      : mcp.status === "failed" ? "\x1b[31m"
-      : "\x1b[33m";
     render([
       `  Daemon:      \x1b[32mrunning\x1b[0m`,
       `  PID:         ${data.pid}`,
@@ -107,7 +98,6 @@ async function cmdStatus() {
       `  Messages:    ${data.messageCount}`,
       `  Busy:        ${data.busy ? "yes" : "no"}`,
       `  Feishu WS:   ${feishuColor}${fs}\x1b[0m`,
-      `  MCP Linear:  ${mcpColor}${mcpLabel}\x1b[0m`,
       `  LaunchAgent: ${launchAgent}`,
     ]);
   }

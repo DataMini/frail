@@ -1,5 +1,5 @@
 import * as path from "path";
-import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { FrailConfig } from "../config/schema";
 import {
   getDaemonState,
@@ -34,8 +34,6 @@ export interface StreamEvent {
 export type StreamCallback = (event: StreamEvent) => void;
 
 function buildSystemPrompt(config: FrailConfig): string {
-  const hasLinear = !!config.mcpServers?.linear;
-
   const base = `You are Frail, a technical assistant that receives user-reported problems, helps analyze and resolve them, and tracks confirmed issues.
 
 ## Response Rules
@@ -56,10 +54,18 @@ Users will describe various problems: bugs, unexpected behavior, errors, feature
 ## Project Context
 
 Project root: ${config.workDir}
-${hasLinear ? `
+
 ## Linear — Issue Tracking
 
-You have Linear MCP tools available. **Actively use them** — they are your primary way to record and manage work items.
+You have the \`linear\` CLI available via Bash. **Actively use it** to record and manage work items.
+
+### Key commands
+- \`linear issue list\` — list your assigned issues
+- \`linear issue create -t "Title" -d "Description"\` — create an issue
+- \`linear issue view <issueId>\` — view issue details
+- \`linear issue update <issueId> ...\` — update an issue
+- \`linear team list\` — list teams
+- \`linear project list\` — list projects
 
 ### When to create an issue
 - You confirmed a real bug or problem through investigation
@@ -72,13 +78,12 @@ You have Linear MCP tools available. **Actively use them** — they are your pri
 - The problem turns out to be a misunderstanding or user error (explain instead)
 - It's a simple question you can answer directly
 
-### How to use Linear tools
+### How to use Linear
 - **Search first** — before creating, search existing issues to avoid duplicates
-- **Create with context** — use a clear title describing the problem, include steps to reproduce, error messages, relevant code paths
+- **Create with context** — clear title, include steps to reproduce, error messages, relevant code paths
 - **Share the result** — after creating, tell the user the issue title and identifier
-- **Update existing issues** — when new information is discovered during conversation, update the relevant issue
-- **List issues** — when the user asks about backlog, current tasks, or priorities
-` : ''}`;
+- **Update existing issues** — when new information is discovered, update the relevant issue
+- **List issues** — when the user asks about backlog, current tasks, or priorities`;
 
   if (config.systemPrompt) {
     return `${base}\n\n--- User Custom Instructions ---\n${config.systemPrompt}`;
@@ -128,7 +133,7 @@ function buildCanUseTool(workDir: string) {
 
 function buildCommonOptions(config: FrailConfig) {
   return {
-    settingSources: [] as const,
+    settingSources: [] as ("user" | "project" | "local")[],
     model: config.provider.model,
     systemPrompt: buildSystemPrompt(config),
     env: buildEnv(config),
@@ -143,11 +148,8 @@ function buildCommonOptions(config: FrailConfig) {
       "NotebookEdit",
       "WebFetch",
       "WebSearch",
-      "mcp__claude_ai_Gmail__authenticate",
-      "mcp__claude_ai_Google_Calendar__authenticate",
     ],
     thinking: { type: "enabled" as const },
-    mcpServers: Object.keys(config.mcpServers).length > 0 ? config.mcpServers : {},
     sandbox: {
       enabled: true,
       autoAllowBashIfSandboxed: true,
@@ -179,13 +181,11 @@ export class AgentSession {
   private history: SessionDisplayMessage[];
   private lock: Promise<void> = Promise.resolve();
   private busy = false;
-  private lastMcpStatus: "connected" | "failed" | "unknown" = "unknown";
-  private lastMcpError: string | null = null;
-  private monitorQuery: Query | null = null;
-  private monitorTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly commonOptions: ReturnType<typeof buildCommonOptions>;
 
   constructor(config: FrailConfig) {
     this.config = config;
+    this.commonOptions = buildCommonOptions(config);
 
     // Load session ID from DB or create new
     const savedId = getDaemonState("session_id");
@@ -231,99 +231,7 @@ export class AgentSession {
     return this.config;
   }
 
-  getMcpStatus(): { status: string; error: string | null } {
-    return { status: this.lastMcpStatus, error: this.lastMcpError };
-  }
-
-  private async ensureMcpConnected(q: Query): Promise<boolean> {
-    const log = getLogger();
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const statuses = await q.mcpServerStatus();
-        const linear = statuses.find((s) => s.name === "linear");
-        if (linear?.status === "connected") {
-          this.lastMcpStatus = "connected";
-          this.lastMcpError = null;
-          return true;
-        }
-        // Status is not connected — attempt reconnection
-        log.warn("MCP", `Linear status: ${linear?.status ?? "not found"} (attempt ${attempt + 1}/3), reconnecting...`);
-        await q.reconnectMcpServer("linear");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.lastMcpError = msg;
-        log.error("MCP", `Reconnect attempt ${attempt + 1}/3 failed: ${msg}`);
-      }
-      if (attempt < 2) await Bun.sleep(1000 * (attempt + 1));
-    }
-    this.lastMcpStatus = "failed";
-    return false;
-  }
-
-  private startMonitor(): void {
-    this.stopMonitor();
-    if (!this.config.mcpServers.linear || !this.monitorQuery) return;
-
-    const log = getLogger();
-    this.monitorTimer = setInterval(async () => {
-      if (!this.monitorQuery) return;
-      try {
-        const statuses = await this.monitorQuery.mcpServerStatus();
-        const linear = statuses.find((s) => s.name === "linear");
-        const prev = this.lastMcpStatus;
-
-        if (linear?.status === "connected") {
-          this.lastMcpStatus = "connected";
-          this.lastMcpError = null;
-          if (prev !== "connected") {
-            log.info("MCP", "Linear MCP reconnected");
-          }
-        } else {
-          log.warn("MCP", `Linear MCP status: ${linear?.status ?? "not found"}, attempting reconnect...`);
-          try {
-            await this.monitorQuery.reconnectMcpServer("linear");
-            const verify = await this.monitorQuery.mcpServerStatus();
-            const check = verify.find((s) => s.name === "linear");
-
-            if (check?.status === "connected") {
-              this.lastMcpStatus = "connected";
-              this.lastMcpError = null;
-              log.info("MCP", "Linear MCP reconnected via monitor");
-            } else {
-              this.lastMcpStatus = "failed";
-              this.lastMcpError = `Reconnect returned status: ${check?.status ?? "not found"}`;
-              log.warn("MCP", `Monitor reconnect did not restore connection: ${check?.status ?? "not found"}`);
-            }
-          } catch (err) {
-            this.lastMcpStatus = "failed";
-            this.lastMcpError = err instanceof Error ? err.message : String(err);
-            log.error("MCP", `Monitor reconnect failed: ${this.lastMcpError}`);
-          }
-        }
-      } catch {
-        // Query object is no longer valid — clean up
-        this.lastMcpStatus = "unknown";
-        this.lastMcpError = "Monitor query expired";
-        this.monitorQuery = null;
-        this.stopMonitor();
-      }
-    }, 30_000);
-  }
-
-  private stopMonitor(): void {
-    if (this.monitorTimer) {
-      clearInterval(this.monitorTimer);
-      this.monitorTimer = null;
-    }
-  }
-
-  destroy(): void {
-    this.stopMonitor();
-    if (this.monitorQuery) {
-      this.monitorQuery.close();
-      this.monitorQuery = null;
-    }
-  }
+  destroy(): void {}
 
   private withLock<T>(fn: () => Promise<T>): Promise<T> {
     const prev = this.lock;
@@ -358,41 +266,16 @@ export class AgentSession {
 
       const blocks: ContentBlock[] = [];
 
-      // Close previous monitor query — new query takes over
-      if (this.monitorQuery) {
-        this.monitorQuery.close();
-        this.monitorQuery = null;
-      }
-      this.stopMonitor();
-
       const q = query({
         prompt: text,
         options: {
-          ...buildCommonOptions(this.config),
+          ...this.commonOptions,
           persistSession: true,
           sessionId: isResume ? undefined : this.sessionId,
           resume: isResume ? this.sessionId : undefined,
           includePartialMessages: true,
         },
       });
-
-      // Gate on MCP health — block if Linear is configured but not connected
-      if (this.config.mcpServers.linear) {
-        const ok = await this.ensureMcpConnected(q);
-        if (!ok) {
-          q.close();
-          const errorMsg = `Linear MCP 连接失败: ${this.lastMcpError || "无法连接"}。正在自动重试，请稍后再发送消息。`;
-          blocks.push({ type: "text", text: errorMsg });
-          log.error("Session", `Chat blocked: Linear MCP unavailable`);
-
-          // Don't record failed attempt to history — pop the user message we just added
-          this.history.pop();
-
-          onStream?.({ type: "stream_end", fullText: errorMsg, toolCalls: [], blocks });
-          this.busy = false;
-          return errorMsg;
-        }
-      }
 
       try {
         for await (const msg of q) {
@@ -492,9 +375,7 @@ export class AgentSession {
         log.error("Session", `Error: ${errMsg}`);
       }
 
-      // Keep query alive as MCP monitor
-      this.monitorQuery = q;
-      this.startMonitor();
+      q.close();
 
       // Derive fullText and toolCalls from blocks for backward compat
       const fullText = blocks
@@ -545,8 +426,6 @@ export class AgentSession {
     this.sessionId = crypto.randomUUID();
     this.messageCount = 0;
     this.history = [];
-    this.lastMcpStatus = "unknown";
-    this.lastMcpError = null;
     setDaemonState("session_id", this.sessionId);
     log.info("Session", `Reset to new session ${this.sessionId}`);
   }

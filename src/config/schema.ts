@@ -22,12 +22,6 @@ const providerSchema = z.object({
   model: z.string().default("claude-sonnet-4-20250514"),
 });
 
-const mcpHttpServerSchema = z.object({
-  type: z.literal("http").optional().default("http"),
-  url: z.string(),
-  headers: z.record(z.string(), z.string()).optional(),
-});
-
 export const frailConfigSchema = z.object({
   systemPrompt: z.string().default(""),
   workDir: z.string().default(process.cwd()),
@@ -35,7 +29,6 @@ export const frailConfigSchema = z.object({
   feishu: feishuSchema.default(() => feishuSchema.parse({})),
   conversation: conversationSchema.default(() => conversationSchema.parse({})),
   agent: agentSchema.default(() => agentSchema.parse({})),
-  mcpServers: z.record(z.string(), mcpHttpServerSchema).default(() => ({})),
 });
 
 export type FrailConfig = z.infer<typeof frailConfigSchema>;

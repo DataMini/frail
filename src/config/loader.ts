@@ -89,10 +89,6 @@ export async function saveConfig(config: FrailConfig): Promise<void> {
   toSave.conversation = config.conversation;
   toSave.agent = config.agent;
 
-  if (Object.keys(config.mcpServers).length > 0) {
-    toSave.mcpServers = config.mcpServers;
-  }
-
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_PATH, yaml.stringify(toSave), "utf-8");
 
