@@ -20,6 +20,7 @@ type EditField =
   | "feishuAppId"
   | "feishuAppSecret"
   | "feishuDomain"
+  | "linearApiKey"
   | null;
 
 const FIELD_OPTIONS = [
@@ -33,6 +34,7 @@ const FIELD_OPTIONS = [
   { label: "Feishu App ID", value: "feishuAppId" as const },
   { label: "Feishu App Secret", value: "feishuAppSecret" as const },
   { label: "Feishu Domain", value: "feishuDomain" as const },
+  { label: "Linear API Key", value: "linearApiKey" as const },
 ];
 
 function maskSecret(value: string | undefined): string {
@@ -66,13 +68,14 @@ export function ConfigPanel({ config, onSave, onBack }: ConfigPanelProps) {
       case "feishuAppId": return config.feishu.appId;
       case "feishuAppSecret": return config.feishu.appSecret;
       case "feishuDomain": return config.feishu.domain;
+      case "linearApiKey": return config.linear?.apiKey ?? "";
       default: return "";
     }
   }
 
   function getDisplayValue(field: EditField): string {
     const val = getFieldValue(field);
-    if (field === "apiKey" || field === "feishuAppSecret") return maskSecret(val || undefined);
+    if (field === "apiKey" || field === "feishuAppSecret" || field === "linearApiKey") return maskSecret(val || undefined);
     if (field === "baseURL") return val || "(default)";
     if (field === "feishuEnabled") return val;
     if (field === "feishuDomain") return val;
@@ -134,6 +137,9 @@ export function ConfigPanel({ config, onSave, onBack }: ConfigPanelProps) {
       case "feishuDomain":
         updated.feishu = { ...updated.feishu, domain: value === "lark" ? "lark" : "feishu" };
         break;
+      case "linearApiKey":
+        updated.linear = { ...updated.linear, apiKey: value || undefined };
+        break;
     }
 
     onSave(updated);
@@ -142,7 +148,7 @@ export function ConfigPanel({ config, onSave, onBack }: ConfigPanelProps) {
 
   if (editing) {
     const label = FIELD_OPTIONS.find((f) => f.value === editing)?.label;
-    const isApiKey = editing === "apiKey";
+    const isApiKey = editing === "apiKey" || editing === "linearApiKey";
     return (
       <Box flexDirection="column" padding={1}>
         <Text bold>Editing: {label}</Text>

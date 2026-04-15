@@ -12,6 +12,10 @@ const conversationSchema = z.object({
   ttlMinutes: z.number().default(30),
 });
 
+const linearSchema = z.object({
+  apiKey: z.string().optional(),
+});
+
 const agentSchema = z.object({
   timeoutMinutes: z.number().default(5),
 });
@@ -28,6 +32,7 @@ export const frailConfigSchema = z.object({
   provider: providerSchema.default(() => providerSchema.parse({})),
   feishu: feishuSchema.default(() => feishuSchema.parse({})),
   conversation: conversationSchema.default(() => conversationSchema.parse({})),
+  linear: linearSchema.default(() => linearSchema.parse({})),
   agent: agentSchema.default(() => agentSchema.parse({})),
 });
 

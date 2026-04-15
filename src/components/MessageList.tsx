@@ -26,16 +26,9 @@ interface MessageListProps {
   isLoading: boolean;
 }
 
-function formatToolName(name: string): string {
-  const match = name.match(/^mcp__([^_]+)__(.+)$/);
-  if (match) return `${match[1]}/${match[2]}`;
-  return name;
-}
-
 function formatToolCall(tc: ToolCallInfo): string {
-  const name = formatToolName(tc.name);
-  if (tc.args) return `${name}(${tc.args})`;
-  return name;
+  if (tc.args) return `${tc.name}(${tc.args})`;
+  return tc.name;
 }
 
 function ToolCallLine({ tc }: { tc: ToolCallInfo }) {

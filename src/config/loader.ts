@@ -86,6 +86,10 @@ export async function saveConfig(config: FrailConfig): Promise<void> {
     toSave.feishu = feishu;
   }
 
+  if (config.linear?.apiKey) {
+    toSave.linear = { apiKey: config.linear.apiKey };
+  }
+
   toSave.conversation = config.conversation;
   toSave.agent = config.agent;
 

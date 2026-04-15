@@ -57,15 +57,37 @@ Project root: ${config.workDir}
 
 ## Linear — Issue Tracking
 
-You have the \`linear\` CLI available via Bash. **Actively use it** to record and manage work items.
+You have the \`linear\` CLI available via Bash. For advanced options, run \`linear <command> --help\`.
 
-### Key commands
-- \`linear issue list\` — list your assigned issues
-- \`linear issue create -t "Title" -d "Description"\` — create an issue
-- \`linear issue view <issueId>\` — view issue details
-- \`linear issue update <issueId> ...\` — update an issue
-- \`linear team list\` — list teams
-- \`linear project list\` — list projects
+### Common commands
+
+**Query & View**
+- \`linear issue mine\` — list your assigned issues (\`-s started\`, \`--all-states\`, \`--team\`, \`--project\`, \`--label\`)
+- \`linear issue query --search "keyword"\` — search issues (\`--team\`, \`--state\`, \`--label\`, \`--assignee\`, \`--all-teams\`)
+- \`linear issue view <id>\` — view issue details (\`--json\` for structured output, \`--no-comments\` to skip comments)
+- \`linear issue url <id>\` — get issue URL
+- \`linear team list\` / \`linear project list\` — list teams / projects
+
+**Create & Update**
+- \`linear issue create -t "Title" -d "Desc"\` — create issue (\`-p 1-4\` priority, \`-l label\`, \`--project\`, \`--team\`, \`-a self\`)
+- \`linear issue update <id>\` — update issue (\`-s state\`, \`-t title\`, \`-d desc\`, \`-a assignee\`, \`-p priority\`)
+- \`linear issue delete <id>\` — delete issue
+
+**Comments**
+- \`linear issue comment add <id> -b "text"\` — add comment
+- \`linear issue comment list <id>\` — list comments (\`--json\`)
+- \`linear issue comment update <commentId> -b "text"\` — update comment
+- \`linear issue comment delete <commentId>\` — delete comment
+
+**Markdown content** — For multi-line descriptions or comments, write to a temp file and use \`--description-file\` / \`--body-file\` instead of inline flags, to avoid shell escaping issues.
+
+### SOP: Managing Issues
+
+1. **Search before creating** — Run \`linear issue query --search "keyword" --all-teams\` to check for duplicates before creating a new issue.
+2. **Create when confirmed** — Only after you've confirmed a real problem, or the user explicitly asks.
+3. **Provide context** — Clear title, steps to reproduce, error messages, relevant code paths. Use \`--description-file\` for rich markdown.
+4. **Keep issues updated** — Use \`linear issue update\` or \`linear issue comment add\` to append findings rather than creating duplicates.
+5. **Report back** — After any Linear operation, tell the user the issue identifier and what you did.
 
 ### When to create an issue
 - You confirmed a real bug or problem through investigation
@@ -76,14 +98,7 @@ You have the \`linear\` CLI available via Bash. **Actively use it** to record an
 ### When NOT to create an issue
 - You're still diagnosing and haven't confirmed anything yet
 - The problem turns out to be a misunderstanding or user error (explain instead)
-- It's a simple question you can answer directly
-
-### How to use Linear
-- **Search first** — before creating, search existing issues to avoid duplicates
-- **Create with context** — clear title, include steps to reproduce, error messages, relevant code paths
-- **Share the result** — after creating, tell the user the issue title and identifier
-- **Update existing issues** — when new information is discovered, update the relevant issue
-- **List issues** — when the user asks about backlog, current tasks, or priorities`;
+- It's a simple question you can answer directly`;
 
   if (config.systemPrompt) {
     return `${base}\n\n--- User Custom Instructions ---\n${config.systemPrompt}`;
@@ -99,6 +114,9 @@ function buildEnv(config: FrailConfig): Record<string, string | undefined> {
     }),
     ...(config.provider.apiKey && {
       ANTHROPIC_AUTH_TOKEN: config.provider.apiKey,
+    }),
+    ...(config.linear?.apiKey && {
+      LINEAR_API_KEY: config.linear.apiKey,
     }),
   };
 }
