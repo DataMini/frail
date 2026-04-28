@@ -34,16 +34,16 @@ function formatToolCall(tc: ToolCallInfo): string {
 function ToolCallLine({ tc }: { tc: ToolCallInfo }) {
   if (tc.status === "running") {
     return (
-      <Box>
-        <Spinner />
-        <Text color="yellow">
-          {" "}<Text bold>{formatToolCall(tc)}</Text>
-        </Text>
+      <Box flexDirection="row">
+        <Box marginRight={1}><Spinner /></Box>
+        <Box flexGrow={1}>
+          <Text color="yellow" bold wrap="wrap">{formatToolCall(tc)}</Text>
+        </Box>
       </Box>
     );
   }
   return (
-    <Text color="green">
+    <Text color="green" wrap="wrap">
       {"● "}<Text bold>{formatToolCall(tc)}</Text>
     </Text>
   );

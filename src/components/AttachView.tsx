@@ -16,6 +16,9 @@ export function AttachView() {
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<IPCClient | null>(null);
   const streamBlocksRef = useRef<ContentBlock[]>([]);
+  const toolByIndexRef = useRef<
+    Map<number, Extract<ContentBlock, { type: "tool" }>>
+  >(new Map());
 
   useEffect(() => {
     const ipc = new IPCClient();
@@ -52,6 +55,7 @@ export function AttachView() {
     ipc.on("stream_start", () => {
       setIsLoading(true);
       streamBlocksRef.current = [];
+      toolByIndexRef.current.clear();
       setStreaming({ role: "assistant", content: "", blocks: [] });
     });
 
@@ -76,20 +80,25 @@ export function AttachView() {
 
     ipc.on("stream_tool", (data: any) => {
       const blocks = streamBlocksRef.current;
-      if (data.status === "running") {
-        blocks.push({
+      const idx: number = data.index;
+      const byIndex = toolByIndexRef.current;
+      // Each agent turn resets stream indices, so only reuse the indexed
+      // block while it's still running; otherwise push a fresh one.
+      const live = byIndex.get(idx);
+      const existing = live?.toolCall.status === "running" ? live : undefined;
+
+      if (existing) {
+        existing.toolCall.args = data.args ?? existing.toolCall.args;
+        if (data.status) existing.toolCall.status = data.status;
+      } else if (data.status === "running") {
+        const block: Extract<ContentBlock, { type: "tool" }> = {
           type: "tool",
           toolCall: { name: data.name, args: data.args, status: "running" },
-        });
-      } else {
-        const existing = blocks.find(
-          (b) => b.type === "tool" && b.toolCall.name === data.name && b.toolCall.status === "running"
-        );
-        if (existing && existing.type === "tool") {
-          existing.toolCall.status = data.status;
-          if (data.args) existing.toolCall.args = data.args;
-        }
+        };
+        blocks.push(block);
+        byIndex.set(idx, block);
       }
+
       const fullText = blocks
         .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
         .map((b) => b.text)

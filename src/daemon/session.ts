@@ -26,6 +26,7 @@ export interface StreamEvent {
   name?: string;
   args?: string;
   status?: "running" | "done";
+  index?: number;
   fullText?: string;
   toolCalls?: ToolCallInfo[];
   blocks?: ContentBlock[];
@@ -178,18 +179,76 @@ function buildCommonOptions(config: FrailConfig) {
   };
 }
 
-function summarizeArgs(input: unknown): string {
+function formatArgs(input: unknown): string {
   if (!input || typeof input !== "object") return "";
   const obj = input as Record<string, unknown>;
   const parts: string[] = [];
   for (const [, v] of Object.entries(obj)) {
     if (v === undefined || v === null) continue;
     const str = typeof v === "string" ? v : JSON.stringify(v);
-    const truncated = str.length > 60 ? str.slice(0, 60) + "..." : str;
-    parts.push(truncated);
-    if (parts.length >= 2) break;
+    parts.push(str);
   }
   return parts.join(", ");
+}
+
+// Best-effort parse of a possibly-truncated JSON string streamed from the
+// model. Closes any open string/array/object so partial input is renderable
+// while it's still arriving. Returns "" when the buffer can't yet be
+// repaired into a usable object — the caller should keep the prior value.
+function tryFormatPartial(buffer: string): string {
+  const trimmed = buffer.trim();
+  if (!trimmed || trimmed === "{") return "";
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") return formatArgs(parsed);
+  } catch {}
+
+  let inString = false;
+  let escape = false;
+  const stack: string[] = [];
+  let lastTopLevelComma = -1;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]!;
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+    else if (ch === "," && stack.length === 1) lastTopLevelComma = i;
+  }
+
+  // Attempt 1: close any open string/containers at the tail.
+  let repaired = trimmed;
+  if (inString) repaired += '"';
+  repaired = repaired.replace(/[:,]\s*$/, "");
+  for (let i = stack.length - 1; i >= 0; i--) repaired += stack[i];
+  try {
+    const parsed = JSON.parse(repaired);
+    if (parsed && typeof parsed === "object") {
+      const out = formatArgs(parsed);
+      if (out) return out;
+    }
+  } catch {}
+
+  // Attempt 2: drop the trailing partial key/value and close at the last
+  // completed pair (top-level comma).
+  if (lastTopLevelComma > 0) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(0, lastTopLevelComma) + "}");
+      if (parsed && typeof parsed === "object") {
+        const out = formatArgs(parsed);
+        if (out) return out;
+      }
+    } catch {}
+  }
+
+  return "";
 }
 
 export class AgentSession {
@@ -283,6 +342,10 @@ export class AgentSession {
       onStream?.({ type: "stream_start" });
 
       const blocks: ContentBlock[] = [];
+      const toolByIndex = new Map<
+        number,
+        { block: Extract<ContentBlock, { type: "tool" }>; partialJson: string }
+      >();
 
       const q = query({
         prompt: text,
@@ -301,20 +364,27 @@ export class AgentSession {
             case "stream_event": {
               const event = msg.event;
 
+              const idx = (event as any).index as number | undefined;
+
               if (event.type === "content_block_start") {
                 const block = (event as any).content_block;
                 if (block?.type === "tool_use") {
                   const tc: ToolCallInfo = {
                     name: block.name,
-                    args: summarizeArgs(block.input),
+                    args: formatArgs(block.input),
                     status: "running",
                   };
-                  blocks.push({ type: "tool", toolCall: tc });
+                  const wrapped = { type: "tool" as const, toolCall: tc };
+                  blocks.push(wrapped);
+                  if (typeof idx === "number") {
+                    toolByIndex.set(idx, { block: wrapped, partialJson: "" });
+                  }
                   onStream?.({
                     type: "stream_tool",
                     name: tc.name,
                     args: tc.args,
                     status: "running",
+                    index: idx,
                   });
                 } else if (block?.type === "text") {
                   blocks.push({ type: "text", text: "" });
@@ -332,36 +402,45 @@ export class AgentSession {
                     blocks.push({ type: "text", text });
                   }
                   onStream?.({ type: "stream_delta", text });
+                } else if ((delta as any).type === "input_json_delta" && typeof idx === "number") {
+                  const entry = toolByIndex.get(idx);
+                  if (entry) {
+                    entry.partialJson += (delta as any).partial_json ?? "";
+                    const nextArgs = tryFormatPartial(entry.partialJson);
+                    if (nextArgs && nextArgs !== entry.block.toolCall.args) {
+                      entry.block.toolCall.args = nextArgs;
+                      onStream?.({
+                        type: "stream_tool",
+                        name: entry.block.toolCall.name,
+                        args: nextArgs,
+                        status: "running",
+                        index: idx,
+                      });
+                    }
+                  }
                 }
               }
 
-              if (event.type === "content_block_stop") {
-                const last = blocks[blocks.length - 1];
-                if (last?.type === "tool" && last.toolCall.status === "running") {
-                  last.toolCall.status = "done";
+              if (event.type === "content_block_stop" && typeof idx === "number") {
+                const entry = toolByIndex.get(idx);
+                if (entry && entry.block.toolCall.status === "running") {
+                  // The accumulated buffer is complete JSON at stop — parse
+                  // it for definitive args (overrides any partial repair).
+                  if (entry.partialJson) {
+                    try {
+                      const parsed = JSON.parse(entry.partialJson);
+                      entry.block.toolCall.args = formatArgs(parsed);
+                    } catch {}
+                  }
+                  entry.block.toolCall.status = "done";
+                  toolByIndex.delete(idx);
                   onStream?.({
                     type: "stream_tool",
-                    name: last.toolCall.name,
-                    args: last.toolCall.args,
+                    name: entry.block.toolCall.name,
+                    args: entry.block.toolCall.args,
                     status: "done",
+                    index: idx,
                   });
-                }
-              }
-              break;
-            }
-            case "assistant": {
-              const content = msg.message?.content;
-              if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (block.type === "tool_use") {
-                    const existing = blocks.find(
-                      (b) => b.type === "tool" && b.toolCall.name === block.name && b.toolCall.status === "running"
-                    );
-                    if (existing && existing.type === "tool") {
-                      existing.toolCall.args = summarizeArgs(block.input);
-                      existing.toolCall.status = "done";
-                    }
-                  }
                 }
               }
               break;
