@@ -1,41 +1,38 @@
 {
   "name": "frail",
-  "version": "0.1.0",
-  "description": "Daemon-first AI chat tool with Feishu bot integration, built with Bun + Ink + Claude Agent SDK",
+  "version": "0.2.0",
+  "description": "Daemon-first AI chat tool with Feishu bot integration, built on pi-mono",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/DataMini/frail.git"
   },
   "homepage": "https://github.com/DataMini/frail",
-  "keywords": ["ai", "chat", "cli", "daemon", "feishu", "lark", "claude", "tui", "ink", "bun"],
-  "module": "src/cli.tsx",
+  "keywords": ["ai", "chat", "cli", "daemon", "feishu", "lark", "tui", "bun", "pi-mono"],
+  "module": "src/cli.ts",
   "type": "module",
   "bin": {
-    "frail": "src/cli.tsx"
+    "frail": "src/cli.ts"
   },
   "scripts": {
-    "dev": "bun --watch run src/cli.tsx daemon",
-    "start": "bun run src/cli.tsx"
+    "dev": "bun --watch run src/cli.ts daemon",
+    "start": "bun run src/cli.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "ink-testing-library": "4.0.0"
+    "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.97",
-    "@inkjs/ui": "^2.0.0",
     "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@linear/sdk": "^83.0.0",
+    "@mariozechner/pi-agent-core": "^0.73.0",
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
     "chalk": "^5.6.2",
     "cosmiconfig": "^9.0.1",
-    "ink": "^7.0.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   }
