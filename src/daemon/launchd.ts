@@ -21,8 +21,8 @@ function getBunPath(): string {
 }
 
 function getCliPath(): string {
-  // Resolve the absolute path to cli.tsx
-  return path.resolve(__dirname, "../cli.tsx");
+  // Resolve the absolute path to cli.ts
+  return path.resolve(__dirname, "../cli.ts");
 }
 
 const WRAPPER_PATH = path.join(CONFIG_DIR, "frail-daemon");

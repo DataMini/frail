@@ -7,33 +7,18 @@ const feishuSchema = z.object({
   domain: z.enum(["feishu", "lark"]).default("feishu"),
 });
 
-const conversationSchema = z.object({
-  maxMessages: z.number().default(50),
-  ttlMinutes: z.number().default(30),
-});
-
 const linearSchema = z.object({
   apiKey: z.string().optional(),
-});
-
-const agentSchema = z.object({
-  timeoutMinutes: z.number().default(5),
-});
-
-const providerSchema = z.object({
-  apiKey: z.string().optional(),
-  baseURL: z.string().optional(),
-  model: z.string().default("claude-sonnet-4-20250514"),
 });
 
 export const frailConfigSchema = z.object({
   systemPrompt: z.string().default(""),
   workDir: z.string().default(process.cwd()),
-  provider: providerSchema.default(() => providerSchema.parse({})),
+  allowedRoots: z.array(z.string()).optional(),
+  /** Idle minutes before the daemon auto-rolls onto a fresh session. 0 disables the feature. */
+  autoNewSessionIdleMinutes: z.number().int().min(0).default(30),
   feishu: feishuSchema.default(() => feishuSchema.parse({})),
-  conversation: conversationSchema.default(() => conversationSchema.parse({})),
   linear: linearSchema.default(() => linearSchema.parse({})),
-  agent: agentSchema.default(() => agentSchema.parse({})),
 });
 
 export type FrailConfig = z.infer<typeof frailConfigSchema>;

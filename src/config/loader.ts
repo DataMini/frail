@@ -69,14 +69,7 @@ export async function saveConfig(config: FrailConfig): Promise<void> {
     toSave.systemPrompt = config.systemPrompt;
   }
 
-  // Provider settings
-  const prov: Record<string, string> = {};
-  prov.model = config.provider.model;
-  if (config.provider.apiKey) prov.apiKey = config.provider.apiKey;
-  if (config.provider.baseURL) prov.baseURL = config.provider.baseURL;
-  toSave.provider = prov;
-
-  if (config.feishu.enabled) {
+  if (config.feishu.enabled || config.feishu.appId || config.feishu.appSecret) {
     const feishu: Record<string, unknown> = {
       enabled: config.feishu.enabled,
       domain: config.feishu.domain,
@@ -89,9 +82,6 @@ export async function saveConfig(config: FrailConfig): Promise<void> {
   if (config.linear?.apiKey) {
     toSave.linear = { apiKey: config.linear.apiKey };
   }
-
-  toSave.conversation = config.conversation;
-  toSave.agent = config.agent;
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_PATH, yaml.stringify(toSave), "utf-8");

@@ -1,41 +1,16 @@
-import * as path from "path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { FrailConfig } from "../config/schema";
 import {
-  getDaemonState,
-  setDaemonState,
-  addSessionMessage,
-  getSessionMessages,
-  clearSessionMessages,
-  getSessionMessageCount,
-} from "../db/threads";
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  type AgentSession,
+} from "@mariozechner/pi-coding-agent";
+import type { ImageContent } from "@mariozechner/pi-ai";
+import type { FrailConfig } from "../config/schema";
+import { createLinearTools } from "../tools/linear";
+import { pathSandboxExtension } from "./extensions/path-sandbox";
 import { getLogger } from "./logger";
-import type { ToolCallInfo, ContentBlock } from "../components/MessageList";
 
-export interface SessionDisplayMessage {
-  role: "user" | "assistant";
-  content: string;
-  source?: "feishu" | "tui";
-  toolCalls?: ToolCallInfo[];
-  blocks?: ContentBlock[];
-}
-
-export interface StreamEvent {
-  type: "stream_delta" | "stream_tool" | "stream_end" | "stream_start";
-  text?: string;
-  name?: string;
-  args?: string;
-  status?: "running" | "done";
-  index?: number;
-  fullText?: string;
-  toolCalls?: ToolCallInfo[];
-  blocks?: ContentBlock[];
-}
-
-export type StreamCallback = (event: StreamEvent) => void;
-
-function buildSystemPrompt(config: FrailConfig): string {
-  const base = `You are Frail, a technical assistant that receives user-reported problems, helps analyze and resolve them, and tracks confirmed issues.
+const FRAIL_PERSONA = `You are Frail, a technical assistant that receives user-reported problems, helps analyze and resolve them, and tracks confirmed issues in Linear.
 
 ## Response Rules
 
@@ -52,478 +27,162 @@ Users will describe various problems: bugs, unexpected behavior, errors, feature
 3. **Conclude** — State your finding in one or two sentences. Confirmed problem, misunderstanding, or needs more info.
 4. **Record** — If the problem is confirmed or the user asks you to track it, create a Linear issue.
 
-## Project Context
+## Available tools
 
-Project root: ${config.workDir}
+You have read-only file tools (read, grep, find, ls) and a small set of native Linear tools — no shell access. File tools are scoped to the configured workspace, and any path that is git-ignored (e.g. .env, build outputs, node_modules) is rejected by design.
 
 ## Linear — Issue Tracking
 
-You have the \`linear\` CLI available via Bash. For advanced options, run \`linear <command> --help\`.
+You have native tools for Linear:
+- linear_list_my_issues({ state?, teamId? })
+- linear_search_issues({ query, teamId?, teamKey?, state?, label? })
+- linear_view_issue({ id, includeComments? })  // id can be a uuid or "ENG-123" identifier
+- linear_create_issue({ title, description?, teamId | teamKey, priority?, labels?, projectId?, assigneeSelf? })
+- linear_update_issue({ id, title?, description?, state?, priority?, assigneeSelf?, assigneeId?, addLabels?, removeLabels?, projectId? })
+- linear_create_comment({ issueId, body })
+- linear_list_comments({ issueId, limit? })
 
-### Common commands
+SOP:
+1. Search before creating — call linear_search_issues first; if a likely match exists, view it via linear_view_issue and ask the user whether to reuse it.
+2. Create when confirmed — only after investigation or explicit user request.
+3. Provide context — clear title, repro steps, error messages, relevant code paths.
+4. Report back the issue identifier and URL after create / update / comment actions.
+5. State changes and comments — call linear_update_issue / linear_create_comment directly; do not punt to the Linear UI.
 
-**Query & View**
-- \`linear issue mine\` — list your assigned issues (\`-s started\`, \`--all-states\`, \`--team\`, \`--project\`, \`--label\`)
-- \`linear issue query --search "keyword"\` — search issues (\`--team\`, \`--state\`, \`--label\`, \`--assignee\`, \`--all-teams\`)
-- \`linear issue view <id>\` — view issue details (\`--json\` for structured output, \`--no-comments\` to skip comments)
-- \`linear issue url <id>\` — get issue URL
-- \`linear team list\` / \`linear project list\` — list teams / projects
+Issue deletion is not exposed — if the user asks to delete an issue, return the URL and ask them to finish in the Linear UI.
 
-**Create & Update**
-- \`linear issue create -t "Title" -d "Desc"\` — create issue (\`-p 1-4\` priority, \`-l label\`, \`--project\`, \`--team\`, \`-a self\`)
-- \`linear issue update <id>\` — update issue (\`-s state\`, \`-t title\`, \`-d desc\`, \`-a assignee\`, \`-p priority\`)
-- \`linear issue delete <id>\` — delete issue
+When NOT to create an issue:
+- You're still diagnosing and haven't confirmed anything yet.
+- The problem turns out to be a misunderstanding or user error (explain instead).
+- It's a simple question you can answer directly.`;
 
-**Comments**
-- \`linear issue comment add <id> -b "text"\` — add comment
-- \`linear issue comment list <id>\` — list comments (\`--json\`)
-- \`linear issue comment update <commentId> -b "text"\` — update comment
-- \`linear issue comment delete <commentId>\` — delete comment
-
-**Markdown content** — For multi-line descriptions or comments, write to a temp file and use \`--description-file\` / \`--body-file\` instead of inline flags, to avoid shell escaping issues.
-
-### SOP: Managing Issues
-
-1. **Search before creating** — Run \`linear issue query --search "keyword" --all-teams\` to check for duplicates before creating a new issue.
-2. **Create when confirmed** — Only after you've confirmed a real problem, or the user explicitly asks.
-3. **Provide context** — Clear title, steps to reproduce, error messages, relevant code paths. Use \`--description-file\` for rich markdown.
-4. **Keep issues updated** — Use \`linear issue update\` or \`linear issue comment add\` to append findings rather than creating duplicates.
-5. **Report back** — After any Linear operation, tell the user the issue identifier and what you did.
-
-### When to create an issue
-- You confirmed a real bug or problem through investigation
-- The user reports a feature request or enhancement
-- The user explicitly asks to record/track/create a ticket
-- The user describes a TODO, requirement, or task they want tracked
-
-### When NOT to create an issue
-- You're still diagnosing and haven't confirmed anything yet
-- The problem turns out to be a misunderstanding or user error (explain instead)
-- It's a simple question you can answer directly`;
-
-  if (config.systemPrompt) {
-    return `${base}\n\n--- User Custom Instructions ---\n${config.systemPrompt}`;
+function buildSystemPromptOverride(config: FrailConfig): string {
+  if (config.systemPrompt && config.systemPrompt.trim()) {
+    return config.systemPrompt;
   }
-  return base;
+  return FRAIL_PERSONA;
 }
 
-function buildEnv(config: FrailConfig): Record<string, string | undefined> {
-  return {
-    ...process.env,
-    ...(config.provider.baseURL && {
-      ANTHROPIC_BASE_URL: config.provider.baseURL,
-    }),
-    ...(config.provider.apiKey && {
-      ANTHROPIC_AUTH_TOKEN: config.provider.apiKey,
-    }),
-    ...(config.linear?.apiKey && {
-      LINEAR_API_KEY: config.linear.apiKey,
-    }),
-  };
-}
-
-function buildCanUseTool(workDir: string) {
-  const resolved = path.resolve(workDir);
-
-  return async (
-    toolName: string,
-    input: Record<string, unknown>,
-    _options: {
-      signal: AbortSignal;
-      suggestions?: unknown[];
-      blockedPath?: string;
-      decisionReason?: string;
-      toolUseID: string;
-      agentID?: string;
-    },
-  ): Promise<{ behavior: "allow"; updatedInput?: Record<string, unknown> } | { behavior: "deny"; message: string }> => {
-    // Check file_path (Read), path (Glob/Grep), command (Bash)
-    const filePath = (input.file_path ?? input.path ?? "") as string;
-    if (filePath) {
-      const abs = path.isAbsolute(filePath) ? filePath : path.resolve(resolved, filePath);
-      const resolvedPath = path.resolve(abs);
-      if (!resolvedPath.startsWith(resolved + "/") && resolvedPath !== resolved) {
-        return { behavior: "deny", message: `Access denied: ${filePath} is outside workDir` };
-      }
-    }
-    return { behavior: "allow", updatedInput: input };
-  };
-}
-
-function buildCommonOptions(config: FrailConfig) {
-  return {
-    settingSources: [] as ("user" | "project" | "local")[],
-    model: config.provider.model,
-    systemPrompt: buildSystemPrompt(config),
-    env: buildEnv(config),
-    cwd: config.workDir,
-    tools: ["Bash", "Read", "Glob", "Grep"] as string[],
-    allowedTools: [] as string[],  // empty → all tools go through canUseTool
-    permissionMode: "default" as const,
-    canUseTool: buildCanUseTool(config.workDir),
-    disallowedTools: [
-      "Edit",
-      "Write",
-      "NotebookEdit",
-      "WebFetch",
-      "WebSearch",
-    ],
-    thinking: { type: "enabled" as const },
-    sandbox: {
-      enabled: true,
-      autoAllowBashIfSandboxed: true,
-      filesystem: {
-        denyWrite: ["/**"],
-      },
-    },
-  };
-}
-
-function formatArgs(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
-  const obj = input as Record<string, unknown>;
-  const parts: string[] = [];
-  for (const [, v] of Object.entries(obj)) {
-    if (v === undefined || v === null) continue;
-    const str = typeof v === "string" ? v : JSON.stringify(v);
-    parts.push(str);
-  }
-  return parts.join(", ");
-}
-
-// Best-effort parse of a possibly-truncated JSON string streamed from the
-// model. Closes any open string/array/object so partial input is renderable
-// while it's still arriving. Returns "" when the buffer can't yet be
-// repaired into a usable object — the caller should keep the prior value.
-function tryFormatPartial(buffer: string): string {
-  const trimmed = buffer.trim();
-  if (!trimmed || trimmed === "{") return "";
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object") return formatArgs(parsed);
-  } catch {}
-
-  let inString = false;
-  let escape = false;
-  const stack: string[] = [];
-  let lastTopLevelComma = -1;
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i]!;
-    if (escape) { escape = false; continue; }
-    if (inString) {
-      if (ch === "\\") escape = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") stack.push("}");
-    else if (ch === "[") stack.push("]");
-    else if (ch === "}" || ch === "]") stack.pop();
-    else if (ch === "," && stack.length === 1) lastTopLevelComma = i;
-  }
-
-  // Attempt 1: close any open string/containers at the tail.
-  let repaired = trimmed;
-  if (inString) repaired += '"';
-  repaired = repaired.replace(/[:,]\s*$/, "");
-  for (let i = stack.length - 1; i >= 0; i--) repaired += stack[i];
-  try {
-    const parsed = JSON.parse(repaired);
-    if (parsed && typeof parsed === "object") {
-      const out = formatArgs(parsed);
-      if (out) return out;
-    }
-  } catch {}
-
-  // Attempt 2: drop the trailing partial key/value and close at the last
-  // completed pair (top-level comma).
-  if (lastTopLevelComma > 0) {
-    try {
-      const parsed = JSON.parse(trimmed.slice(0, lastTopLevelComma) + "}");
-      if (parsed && typeof parsed === "object") {
-        const out = formatArgs(parsed);
-        if (out) return out;
-      }
-    } catch {}
-  }
-
-  return "";
-}
-
-export class AgentSession {
-  private config: FrailConfig;
-  private sessionId: string;
-  private messageCount: number;
-  private history: SessionDisplayMessage[];
-  private lock: Promise<void> = Promise.resolve();
-  private busy = false;
-  private readonly commonOptions: ReturnType<typeof buildCommonOptions>;
-
-  constructor(config: FrailConfig) {
-    this.config = config;
-    this.commonOptions = buildCommonOptions(config);
-
-    // Load session ID from DB or create new
-    const savedId = getDaemonState("session_id");
-    if (savedId) {
-      this.sessionId = savedId;
-      // Load history from DB
-      const saved = getSessionMessages(savedId);
-      this.history = saved.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-        source: m.source as "feishu" | "tui",
-        toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
-        blocks: m.blocks ? JSON.parse(m.blocks) : undefined,
-      }));
-      this.messageCount = getSessionMessageCount(savedId);
-      getLogger().info("Session", `Resumed session ${savedId} with ${this.messageCount} messages`);
-    } else {
-      this.sessionId = crypto.randomUUID();
-      this.history = [];
-      this.messageCount = 0;
-      setDaemonState("session_id", this.sessionId);
-      getLogger().info("Session", `Created new session ${this.sessionId}`);
-    }
-  }
-
-  isBusy(): boolean {
-    return this.busy;
-  }
-
-  getSessionId(): string {
-    return this.sessionId;
-  }
-
-  getMessageCount(): number {
-    return this.messageCount;
-  }
-
-  getHistory(): SessionDisplayMessage[] {
-    return [...this.history];
-  }
-
-  getConfig(): FrailConfig {
-    return this.config;
-  }
-
-  destroy(): void {}
-
-  private withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = this.lock;
-    let resolve: (v: T) => void;
-    let reject: (e: unknown) => void;
-    const result = new Promise<T>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    this.lock = prev.then(() => fn().then(resolve!, reject!)).catch(() => {});
-    return result;
-  }
-
-  async chat(
+export interface FrailSession {
+  /** Pi's AgentSession — drives the agent loop, tools, and persistence. */
+  session: AgentSession;
+  /** Run a prompt, serialized so concurrent callers (TUI + Feishu) don't race. */
+  prompt(
     text: string,
-    source: "feishu" | "tui",
-    onStream?: StreamCallback
-  ): Promise<string> {
-    return this.withLock(async () => {
-      this.busy = true;
-      const log = getLogger();
-      const isResume = this.messageCount > 0;
+    source: "tui" | "feishu",
+    images?: ImageContent[],
+  ): Promise<void>;
+  /** Last assistant text emitted by the session (for Feishu replies). */
+  getLastAssistantText(): string | undefined;
+  /** True while a prompt is being processed. */
+  isBusy(): boolean;
+  /** True while pi is auto-compacting context. */
+  isCompacting(): boolean;
+  /** True once the persisted branch contains at least one user/assistant message. */
+  hasMessages(): boolean;
+  /** Abort the in-flight turn. */
+  abort(): Promise<void>;
+  /** Epoch ms of the most recent prompt (or boot/load). Used by idle auto-new-session. */
+  getLastActivityAt(): number;
+  /** Reset the idle clock — used to back off after a failure. */
+  touchActivity(): void;
+  /** Roll the session onto a fresh JSONL file. Aborts any in-flight turn. Returns new sessionId. */
+  newSession(): Promise<string>;
+}
 
-      // Record user message
-      const userMsg: SessionDisplayMessage = { role: "user", content: text, source };
-      this.history.push(userMsg);
-      addSessionMessage(this.sessionId, "user", text, source);
+export async function bootSession(config: FrailConfig): Promise<FrailSession> {
+  const log = getLogger();
+  const cwd = config.workDir;
+  const allowedRoots =
+    config.allowedRoots && config.allowedRoots.length > 0
+      ? config.allowedRoots
+      : [config.workDir];
 
-      log.info("Session", `[${source}] User: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`);
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    systemPrompt: buildSystemPromptOverride(config),
+    // No project context files / skills / extensions discovery for now —
+    // frail injects its own slash-command extension elsewhere.
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [pathSandboxExtension(allowedRoots)],
+  });
+  await resourceLoader.reload();
 
-      onStream?.({ type: "stream_start" });
+  const customTools = createLinearTools(config.linear?.apiKey);
 
-      const blocks: ContentBlock[] = [];
-      const toolByIndex = new Map<
-        number,
-        { block: Extract<ContentBlock, { type: "tool" }>; partialJson: string }
-      >();
+  const { session, modelFallbackMessage } = await createAgentSession({
+    cwd,
+    resourceLoader,
+    customTools,
+    // Allowlist applies to BOTH built-ins and customTools — must include
+    // every Linear tool name or the LLM never sees them.
+    tools: ["read", "grep", "find", "ls", ...customTools.map((t) => t.name)],
+  });
 
-      const q = query({
-        prompt: text,
-        options: {
-          ...this.commonOptions,
-          persistSession: true,
-          sessionId: isResume ? undefined : this.sessionId,
-          resume: isResume ? this.sessionId : undefined,
-          includePartialMessages: true,
-        },
-      });
+  if (modelFallbackMessage) {
+    log.info("Session", modelFallbackMessage);
+  }
+  log.info(
+    "Session",
+    `pi AgentSession ready (cwd=${cwd}, customTools=${customTools.length}, sessionId=${session.sessionId}, allowedRoots=${allowedRoots.join("|")})`,
+  );
 
-      try {
-        for await (const msg of q) {
-          switch (msg.type) {
-            case "stream_event": {
-              const event = msg.event;
+  let lock: Promise<void> = Promise.resolve();
+  let busy = false;
 
-              const idx = (event as any).index as number | undefined;
+  // Seed from the most recent persisted entry's timestamp so a daemon restart
+  // doesn't pretend a stale session is "fresh activity". Falls back to now.
+  const branch = session.sessionManager.getBranch();
+  const latestEntry = branch[branch.length - 1];
+  let lastActivityAt = latestEntry?.timestamp
+    ? new Date(latestEntry.timestamp).getTime()
+    : Date.now();
 
-              if (event.type === "content_block_start") {
-                const block = (event as any).content_block;
-                if (block?.type === "tool_use") {
-                  const tc: ToolCallInfo = {
-                    name: block.name,
-                    args: formatArgs(block.input),
-                    status: "running",
-                  };
-                  const wrapped = { type: "tool" as const, toolCall: tc };
-                  blocks.push(wrapped);
-                  if (typeof idx === "number") {
-                    toolByIndex.set(idx, { block: wrapped, partialJson: "" });
-                  }
-                  onStream?.({
-                    type: "stream_tool",
-                    name: tc.name,
-                    args: tc.args,
-                    status: "running",
-                    index: idx,
-                  });
-                } else if (block?.type === "text") {
-                  blocks.push({ type: "text", text: "" });
-                }
-              }
-
-              if (event.type === "content_block_delta" && "delta" in event) {
-                const delta = event.delta;
-                if (delta.type === "text_delta") {
-                  const text = (delta as any).text;
-                  const last = blocks[blocks.length - 1];
-                  if (last && last.type === "text") {
-                    last.text += text;
-                  } else {
-                    blocks.push({ type: "text", text });
-                  }
-                  onStream?.({ type: "stream_delta", text });
-                } else if ((delta as any).type === "input_json_delta" && typeof idx === "number") {
-                  const entry = toolByIndex.get(idx);
-                  if (entry) {
-                    entry.partialJson += (delta as any).partial_json ?? "";
-                    const nextArgs = tryFormatPartial(entry.partialJson);
-                    if (nextArgs && nextArgs !== entry.block.toolCall.args) {
-                      entry.block.toolCall.args = nextArgs;
-                      onStream?.({
-                        type: "stream_tool",
-                        name: entry.block.toolCall.name,
-                        args: nextArgs,
-                        status: "running",
-                        index: idx,
-                      });
-                    }
-                  }
-                }
-              }
-
-              if (event.type === "content_block_stop" && typeof idx === "number") {
-                const entry = toolByIndex.get(idx);
-                if (entry && entry.block.toolCall.status === "running") {
-                  // The accumulated buffer is complete JSON at stop — parse
-                  // it for definitive args (overrides any partial repair).
-                  if (entry.partialJson) {
-                    try {
-                      const parsed = JSON.parse(entry.partialJson);
-                      entry.block.toolCall.args = formatArgs(parsed);
-                    } catch {}
-                  }
-                  entry.block.toolCall.status = "done";
-                  toolByIndex.delete(idx);
-                  onStream?.({
-                    type: "stream_tool",
-                    name: entry.block.toolCall.name,
-                    args: entry.block.toolCall.args,
-                    status: "done",
-                    index: idx,
-                  });
-                }
-              }
-              break;
-            }
-            case "result": {
-              if ("subtype" in msg && msg.subtype === "success") {
-                const resultText = (msg as any).result;
-                if (resultText) {
-                  const lastText = [...blocks].reverse().find((b) => b.type === "text");
-                  if (lastText && lastText.type === "text") {
-                    lastText.text = resultText;
-                  } else {
-                    blocks.push({ type: "text", text: resultText });
-                  }
-                }
-              } else if ("is_error" in msg && (msg as any).is_error) {
-                blocks.push({ type: "text", text: `Error: ${(msg as any).error ?? "Unknown error"}` });
-              }
-              break;
-            }
-          }
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        const errorText = errMsg.includes("API key")
-          ? `Error: ${errMsg}\n\nRun 'frail init' to configure your API key.`
-          : `Error: ${errMsg}`;
-        blocks.push({ type: "text", text: errorText });
-        log.error("Session", `Error: ${errMsg}`);
-      }
-
-      q.close();
-
-      // Derive fullText and toolCalls from blocks for backward compat
-      const fullText = blocks
-        .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.text)
-        .join("\n\n");
-      const toolCalls = blocks
-        .filter((b): b is Extract<ContentBlock, { type: "tool" }> => b.type === "tool")
-        .map((b) => b.toolCall);
-
-      // Mark remaining running tools as done
-      for (const tc of toolCalls) {
-        if (tc.status === "running") tc.status = "done";
-      }
-
-      // Record assistant message
-      const assistantMsg: SessionDisplayMessage = {
-        role: "assistant",
-        content: fullText,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        blocks: blocks.length > 0 ? blocks : undefined,
-      };
-      this.history.push(assistantMsg);
-      this.messageCount++;
-
-      addSessionMessage(
-        this.sessionId,
-        "assistant",
-        fullText,
-        source,
-        toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
-        blocks.length > 0 ? JSON.stringify(blocks) : undefined
+  const prompt: FrailSession["prompt"] = (text, source, images) => {
+    lastActivityAt = Date.now();
+    const next = lock.then(async () => {
+      busy = true;
+      const imageNote = images?.length ? ` (+${images.length} image)` : "";
+      log.info(
+        "Session",
+        `[${source}] User: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}${imageNote}`,
       );
-
-      onStream?.({ type: "stream_end", fullText, toolCalls, blocks });
-
-      log.info("Session", `Assistant: ${fullText.slice(0, 100)}${fullText.length > 100 ? "..." : ""}`);
-
-      this.busy = false;
-      return fullText;
+      try {
+        await session.prompt(text, images?.length ? { images } : undefined);
+      } finally {
+        busy = false;
+        lastActivityAt = Date.now();
+      }
     });
-  }
+    lock = next.catch(() => undefined);
+    return next;
+  };
 
-  resetSession(): void {
-    const log = getLogger();
-    this.destroy();
-    clearSessionMessages(this.sessionId);
-    this.sessionId = crypto.randomUUID();
-    this.messageCount = 0;
-    this.history = [];
-    setDaemonState("session_id", this.sessionId);
-    log.info("Session", `Reset to new session ${this.sessionId}`);
-  }
+  const newSession: FrailSession["newSession"] = async () => {
+    await session.abort();
+    session.agent.reset();
+    session.sessionManager.newSession();
+    lastActivityAt = Date.now();
+    return session.sessionManager.getSessionId();
+  };
+
+  return {
+    session,
+    prompt,
+    getLastAssistantText: () => session.getLastAssistantText(),
+    isBusy: () => busy,
+    isCompacting: () => session.isCompacting,
+    hasMessages: () =>
+      session.sessionManager.getBranch().some((e) => e.type === "message"),
+    abort: () => session.abort(),
+    getLastActivityAt: () => lastActivityAt,
+    touchActivity: () => {
+      lastActivityAt = Date.now();
+    },
+    newSession,
+  };
 }
